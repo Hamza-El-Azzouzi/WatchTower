@@ -1,0 +1,11 @@
+[agent]
+name = "dev-server-01"
+
+[collection]
+interval_seconds = 10
+
+[metrics]
+collect_cpu = true
+collect_memory = true
+collect_disk = true
+collect_network = true
