@@ -37,6 +37,7 @@ base64 = "0.21"
 
 # Database
 sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "sqlite", "chrono", "uuid"] }
+bcrypt = "0.18.0"
 
 [dev-dependencies]
 # Testing utilities

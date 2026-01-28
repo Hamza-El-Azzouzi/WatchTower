@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::alerts::manager::AlertManager;
-use crate::auth::{AuthService, CreateApiKeyRequest};
+use crate::auth::{AdminLoginRequest, AdminLoginResponse, AuthService, CreateApiKeyRequest};
 use crate::db::Database;
 use crate::storage::{Agent, DataPoint, MetricsPayload, StorageStats, TimeSeriesStore};
 
@@ -183,11 +183,39 @@ pub async fn get_latest_metrics(
     }))
 }
 
-/// GET /api/v1/agents - List all registered agents
-pub async fn list_agents(State(state): State<Arc<AppState>>) -> Json<Vec<Agent>> {
-    info!("Listing all registered agents");
-    let agents = state.store.get_agents();
-    Json(agents)
+/// GET /api/v1/agents - List all registered agents (filtered by API key)
+pub async fn list_agents(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<Agent>>, ApiError> {
+    info!("Listing registered agents");
+
+    // Extract API key from headers
+    let api_key = headers
+        .get("X-API-Key")
+        .or_else(|| headers.get("Authorization"))
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)));
+
+    let all_agents = state.store.get_agents();
+
+    // If no auth service or no API key, return all agents (backward compatibility)
+    let filtered_agents = if let (Some(auth_service), Some(key)) = (&state.auth_service, api_key) {
+        match auth_service.validate_api_key(key).await {
+            Ok(Some(api_key_data)) => {
+                // Filter agents to only those used by this API key
+                all_agents
+                    .into_iter()
+                    .filter(|agent| api_key_data.used_by_agents.contains(&agent.id))
+                    .collect()
+            }
+            _ => all_agents, // If validation fails, return all for backward compatibility
+        }
+    } else {
+        all_agents
+    };
+
+    Ok(Json(filtered_agents))
 }
 
 /// GET /api/v1/agents/:agent_id - Get specific agent details
@@ -209,11 +237,36 @@ pub async fn get_agent(
         .ok_or_else(|| ApiError::BadRequest(format!("Agent '{}' not found", params.agent_id)))
 }
 
-/// GET /api/v1/stats - Get storage statistics
-pub async fn get_stats(State(state): State<Arc<AppState>>) -> Json<StorageStats> {
+/// GET /api/v1/stats - Get storage statistics (filtered by API key)
+pub async fn get_stats(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<StorageStats>, ApiError> {
     info!("Getting storage statistics");
-    let stats = state.store.get_stats();
-    Json(stats)
+
+    // Extract API key from headers
+    let api_key = headers
+        .get("X-API-Key")
+        .or_else(|| headers.get("Authorization"))
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)));
+
+    let mut stats = state.store.get_stats();
+
+    // Filter agent count if API key is provided
+    if let (Some(auth_service), Some(key)) = (&state.auth_service, api_key) {
+        if let Ok(Some(api_key_data)) = auth_service.validate_api_key(key).await {
+            // Update agent count to only include agents for this API key
+            let all_agents = state.store.get_agents();
+            let filtered_count = all_agents
+                .iter()
+                .filter(|agent| api_key_data.used_by_agents.contains(&agent.id))
+                .count();
+            stats.total_agents = filtered_count;
+        }
+    }
+
+    Ok(Json(stats))
 }
 
 /// GET /health - Health check endpoint
@@ -303,28 +356,52 @@ pub async fn toggle_alert_rule(
         .ok_or_else(|| ApiError::BadRequest(format!("Alert rule {} not found", rule_id)))
 }
 
-/// GET /api/v1/alerts - Get all alerts
+/// GET /api/v1/alerts - Get all alerts (filtered by API key)
 pub async fn list_alerts(
     State(state): State<Arc<AppState>>,
-) -> Json<crate::alerts::AlertsResponse> {
+    headers: HeaderMap,
+) -> Result<Json<crate::alerts::AlertsResponse>, ApiError> {
+    // Extract API key from headers
+    let api_key = headers
+        .get("X-API-Key")
+        .or_else(|| headers.get("Authorization"))
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)));
+
     let all_alerts = state.alert_manager.get_all_alerts().await;
-    let active_alerts: Vec<_> = all_alerts
+
+    // Filter alerts by API key if provided
+    let filtered_alerts = if let (Some(auth_service), Some(key)) = (&state.auth_service, api_key) {
+        if let Ok(Some(api_key_data)) = auth_service.validate_api_key(key).await {
+            // Only include alerts for agents associated with this API key
+            all_alerts
+                .into_iter()
+                .filter(|alert| api_key_data.used_by_agents.contains(&alert.agent_id))
+                .collect()
+        } else {
+            all_alerts
+        }
+    } else {
+        all_alerts
+    };
+
+    let active_alerts: Vec<_> = filtered_alerts
         .iter()
         .filter(|a| a.is_active())
         .cloned()
         .collect();
-    let recent_alerts: Vec<_> = all_alerts
+    let recent_alerts: Vec<_> = filtered_alerts
         .iter()
         .filter(|a| a.state == crate::alerts::AlertState::Resolved)
         .take(50)
         .cloned()
         .collect();
 
-    Json(crate::alerts::AlertsResponse {
+    Ok(Json(crate::alerts::AlertsResponse {
         total_active: active_alerts.len(),
         active_alerts,
         recent_alerts,
-    })
+    }))
 }
 
 /// GET /api/v1/alerts/:id - Get specific alert
@@ -494,4 +571,269 @@ pub async fn revoke_api_key(
             )))
         }
     }
+}
+
+// ============================================================================
+// Admin Authentication Endpoints
+// ============================================================================
+
+/// POST /api/v1/admin/login - Admin login
+pub async fn admin_login(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<AdminLoginRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    let auth_service = state
+        .auth_service
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest("Authentication is not enabled".to_string()))?;
+
+    match auth_service
+        .authenticate_admin(&request.username, &request.password)
+        .await
+    {
+        Ok(Some(admin)) => {
+            let token = AuthService::generate_admin_token();
+            info!("Admin user '{}' logged in successfully", admin.username);
+            Ok(Json(AdminLoginResponse {
+                username: admin.username,
+                full_name: admin.full_name,
+                token,
+            }))
+        }
+        Ok(None) => Err(ApiError::BadRequest(
+            "Invalid username or password".to_string(),
+        )),
+        Err(e) => {
+            error!("Admin login error: {}", e);
+            Err(ApiError::InternalError("Login failed".to_string()))
+        }
+    }
+}
+
+/// GET /api/v1/admin/validate - Validate admin session
+pub async fn admin_validate(
+    State(_state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    // Extract admin token from headers
+    let token = headers
+        .get("X-Admin-Token")
+        .or_else(|| headers.get("Authorization"))
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)));
+
+    if let Some(token) = token {
+        // Validate token format (simple check - in production use JWT or session store)
+        if token.starts_with("admin_") && token.len() > 10 {
+            return Ok(Json(serde_json::json!({
+                "valid": true
+            })));
+        }
+    }
+
+    Err(ApiError::BadRequest(
+        "Invalid or missing admin token".to_string(),
+    ))
+}
+
+/// POST /api/v1/admin/change-password - Change admin password
+pub async fn admin_change_password(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<ChangePasswordRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Validate admin token
+    let _token = extract_admin_token(&headers)
+        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+
+    let auth_service = state
+        .auth_service
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest("Authentication is not enabled".to_string()))?;
+
+    match auth_service
+        .change_admin_password(
+            &request.username,
+            &request.old_password,
+            &request.new_password,
+        )
+        .await
+    {
+        Ok(true) => {
+            info!("Admin '{}' changed password successfully", request.username);
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": "Password changed successfully"
+            })))
+        }
+        Ok(false) => Err(ApiError::BadRequest(
+            "Invalid username or password".to_string(),
+        )),
+        Err(e) => {
+            error!("Password change error: {}", e);
+            Err(ApiError::InternalError(
+                "Password change failed".to_string(),
+            ))
+        }
+    }
+}
+
+/// POST /api/v1/admin/users - Create new admin user
+pub async fn admin_create_user(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(request): Json<CreateAdminRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Validate admin token
+    let _token = extract_admin_token(&headers)
+        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+
+    let auth_service = state
+        .auth_service
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest("Authentication is not enabled".to_string()))?;
+
+    match auth_service
+        .create_admin(
+            &request.username,
+            &request.password,
+            request.email.as_deref(),
+            request.full_name.as_deref(),
+        )
+        .await
+    {
+        Ok(id) => {
+            info!(
+                "Created new admin user '{}' with id {}",
+                request.username, id
+            );
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "id": id,
+                "username": request.username
+            })))
+        }
+        Err(e) => {
+            error!("Admin creation error: {}", e);
+            Err(ApiError::BadRequest(format!(
+                "Failed to create admin: {}",
+                e
+            )))
+        }
+    }
+}
+
+/// GET /api/v1/admin/users - List all admin users
+pub async fn admin_list_users(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    // Validate admin token
+    let _token = extract_admin_token(&headers)
+        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+
+    let auth_service = state
+        .auth_service
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest("Authentication is not enabled".to_string()))?;
+
+    match auth_service.list_admins().await {
+        Ok(admins) => Ok(Json(admins)),
+        Err(e) => {
+            error!("Failed to list admins: {}", e);
+            Err(ApiError::InternalError("Failed to list admins".to_string()))
+        }
+    }
+}
+
+/// POST /api/v1/admin/users/:username/deactivate - Deactivate admin user
+pub async fn admin_deactivate_user(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(username): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Validate admin token
+    let _token = extract_admin_token(&headers)
+        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+
+    let auth_service = state
+        .auth_service
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest("Authentication is not enabled".to_string()))?;
+
+    match auth_service.deactivate_admin(&username).await {
+        Ok(_) => {
+            info!("Deactivated admin user '{}'", username);
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": format!("User '{}' deactivated", username)
+            })))
+        }
+        Err(e) => {
+            error!("Failed to deactivate admin: {}", e);
+            Err(ApiError::InternalError(
+                "Failed to deactivate admin".to_string(),
+            ))
+        }
+    }
+}
+
+/// POST /api/v1/admin/users/:username/activate - Activate admin user
+pub async fn admin_activate_user(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(username): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Validate admin token
+    let _token = extract_admin_token(&headers)
+        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+
+    let auth_service = state
+        .auth_service
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest("Authentication is not enabled".to_string()))?;
+
+    match auth_service.activate_admin(&username).await {
+        Ok(_) => {
+            info!("Activated admin user '{}'", username);
+            Ok(Json(serde_json::json!({
+                "success": true,
+                "message": format!("User '{}' activated", username)
+            })))
+        }
+        Err(e) => {
+            error!("Failed to activate admin: {}", e);
+            Err(ApiError::InternalError(
+                "Failed to activate admin".to_string(),
+            ))
+        }
+    }
+}
+
+// Helper function to extract admin token
+fn extract_admin_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("X-Admin-Token")
+        .or_else(|| headers.get("Authorization"))
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)))
+        .filter(|token| token.starts_with("admin_"))
+        .map(|s| s.to_string())
+}
+
+/// Request to change admin password
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub username: String,
+    pub old_password: String,
+    pub new_password: String,
+}
+
+/// Request to create new admin
+#[derive(Debug, Deserialize)]
+pub struct CreateAdminRequest {
+    pub username: String,
+    pub password: String,
+    pub email: Option<String>,
+    pub full_name: Option<String>,
 }

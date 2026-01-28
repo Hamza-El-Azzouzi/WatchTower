@@ -1,3 +1,5 @@
+import { getAuthHeaders } from './auth-utils';
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
 export interface ApiKey {
@@ -33,6 +35,7 @@ export async function createApiKey(request: CreateApiKeyRequest): Promise<Create
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...getAuthHeaders()
     },
     body: JSON.stringify(request),
   })
@@ -46,7 +49,9 @@ export async function createApiKey(request: CreateApiKeyRequest): Promise<Create
 }
 
 export async function listApiKeys(): Promise<ApiKey[]> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/auth/keys`)
+  const response = await fetch(`${API_BASE_URL}/api/v1/auth/keys`, {
+    headers: getAuthHeaders()
+  })
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: 'Failed to fetch API keys' }))
@@ -59,6 +64,7 @@ export async function listApiKeys(): Promise<ApiKey[]> {
 export async function revokeApiKey(keyId: number): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/api/v1/auth/keys/${keyId}`, {
     method: 'DELETE',
+    headers: getAuthHeaders()
   })
 
   if (!response.ok) {

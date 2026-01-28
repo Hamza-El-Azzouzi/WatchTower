@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Plus, Key, Trash2, Copy, Check, AlertCircle, RefreshCw, Clock, Shield } from 'lucide-react'
+import { Plus, Key, Trash2, Copy, Check, AlertCircle, RefreshCw, Clock, Shield, Activity } from 'lucide-react'
 import { listApiKeys, createApiKey, revokeApiKey, type ApiKey, type CreateApiKeyRequest } from '@/lib/api-keys-api'
 
 export default function ApiKeysPage() {
@@ -174,6 +174,26 @@ export default function ApiKeysPage() {
                           </span>
                         </div>
                       </div>
+                      
+                      {/* Agents Using This Key */}
+                      {key.used_by_agents && key.used_by_agents.length > 0 && (
+                        <div className="mt-4 pt-4 border-t border-card-border">
+                          <div className="flex items-center gap-2 mb-2">
+                            <Activity className="w-4 h-4 text-primary" />
+                            <span className="text-sm font-semibold text-foreground">Agents Using This Key</span>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {key.used_by_agents.map((agentId, idx) => (
+                              <span
+                                key={idx}
+                                className="px-2 py-1 bg-sidebar-accent/20 text-foreground rounded text-xs font-mono"
+                              >
+                                {agentId}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <div className="flex gap-2 ml-4">
                       {!key.revoked && (

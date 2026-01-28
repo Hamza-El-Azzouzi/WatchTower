@@ -197,7 +197,7 @@ jobs:
       run: cargo bench --no-fail-fast
     
     - name: Archive benchmark results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: benchmark-results
         path: server/target/criterion/

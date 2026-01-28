@@ -61,11 +61,15 @@ impl Agent {
     }
 }
 
+// Type alias to simplify complex nested HashMap
+type MetricData = HashMap<String, Vec<DataPoint>>;
+type AgentMetrics = HashMap<String, MetricData>;
+
 /// Thread-safe in-memory time-series storage
 #[derive(Clone)]
 pub struct TimeSeriesStore {
     // agent_id -> metric_name -> Vec<DataPoint>
-    data: Arc<RwLock<HashMap<String, HashMap<String, Vec<DataPoint>>>>>,
+    data: Arc<RwLock<AgentMetrics>>,
     // agent_id -> Agent
     agents: Arc<RwLock<HashMap<String, Agent>>>,
     max_points_per_metric: usize,
@@ -90,8 +94,8 @@ impl TimeSeriesStore {
     ) {
         let mut data = self.data.write().unwrap();
 
-        let agent_data = data.entry(agent_id).or_insert_with(HashMap::new);
-        let points = agent_data.entry(metric_name).or_insert_with(Vec::new);
+        let agent_data = data.entry(agent_id).or_default();
+        let points = agent_data.entry(metric_name).or_default();
 
         points.push(DataPoint { timestamp, value });
 
@@ -136,8 +140,8 @@ impl TimeSeriesStore {
                 points
                     .iter()
                     .filter(|p| {
-                        let after_from = from.map_or(true, |f| p.timestamp >= f);
-                        let before_to = to.map_or(true, |t| p.timestamp <= t);
+                        let after_from = from.is_none_or(|f| p.timestamp >= f);
+                        let before_to = to.is_none_or(|t| p.timestamp <= t);
                         after_from && before_to
                     })
                     .cloned()

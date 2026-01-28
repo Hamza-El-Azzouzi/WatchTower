@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bcrypt::verify;
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,36 @@ impl ApiKey {
     }
 }
 
+/// Admin user for dashboard access
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUser {
+    pub id: i64,
+    pub username: String,
+    #[serde(skip_serializing)]
+    #[allow(dead_code)]
+    pub password_hash: String,
+    pub email: Option<String>,
+    pub full_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub is_active: bool,
+}
+
+/// Admin login request
+#[derive(Debug, Deserialize)]
+pub struct AdminLoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// Admin login response
+#[derive(Debug, Serialize)]
+pub struct AdminLoginResponse {
+    pub username: String,
+    pub full_name: Option<String>,
+    pub token: String, // Session token
+}
+
 /// Authentication service for managing API keys
 pub struct AuthService {
     pool: SqlitePool,
@@ -74,6 +105,62 @@ pub struct AuthService {
 impl AuthService {
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
+    }
+
+    /// Authenticate admin user
+    pub async fn authenticate_admin(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<Option<AdminUser>> {
+        let result = sqlx::query(
+            r#"
+            SELECT id, username, password_hash, email, full_name, created_at, last_login_at, is_active
+            FROM admin_users
+            WHERE username = ? AND is_active = 1
+            "#
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = result {
+            let password_hash: String = row.get("password_hash");
+
+            // Verify password
+            if verify(password, &password_hash).unwrap_or(false) {
+                // Update last login
+                sqlx::query("UPDATE admin_users SET last_login_at = ? WHERE username = ?")
+                    .bind(Utc::now())
+                    .bind(username)
+                    .execute(&self.pool)
+                    .await?;
+
+                return Ok(Some(AdminUser {
+                    id: row.get("id"),
+                    username: row.get("username"),
+                    password_hash,
+                    email: row.get("email"),
+                    full_name: row.get("full_name"),
+                    created_at: row.get("created_at"),
+                    last_login_at: row.get("last_login_at"),
+                    is_active: row.get("is_active"),
+                }));
+            }
+        }
+
+        Ok(None)
+    }
+
+    /// Generate admin session token
+    pub fn generate_admin_token() -> String {
+        let mut rng = rand::thread_rng();
+        let random_bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        use base64::{engine::general_purpose, Engine as _};
+        format!(
+            "admin_{}",
+            general_purpose::URL_SAFE_NO_PAD.encode(&random_bytes)
+        )
     }
 
     /// Create a new API key
@@ -247,6 +334,7 @@ impl AuthService {
     }
 
     /// Get an API key by ID
+    #[allow(dead_code)]
     pub async fn get_api_key(&self, key_id: i64) -> Result<Option<ApiKey>> {
         let result = sqlx::query(
             r#"
@@ -284,6 +372,103 @@ impl AuthService {
         };
 
         Ok(key)
+    }
+
+    /// Change admin password
+    pub async fn change_admin_password(
+        &self,
+        username: &str,
+        old_password: &str,
+        new_password: &str,
+    ) -> Result<bool> {
+        // First authenticate with old password
+        let admin = self.authenticate_admin(username, old_password).await?;
+
+        if admin.is_none() {
+            return Ok(false);
+        }
+
+        // Hash the new password
+        let new_hash = bcrypt::hash(new_password, bcrypt::DEFAULT_COST)?;
+
+        // Update the password
+        sqlx::query("UPDATE admin_users SET password_hash = ? WHERE username = ?")
+            .bind(&new_hash)
+            .bind(username)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(true)
+    }
+
+    /// Create a new admin user
+    pub async fn create_admin(
+        &self,
+        username: &str,
+        password: &str,
+        email: Option<&str>,
+        full_name: Option<&str>,
+    ) -> Result<i64> {
+        let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)?;
+
+        let result = sqlx::query(
+            "INSERT INTO admin_users (username, password_hash, email, full_name) VALUES (?, ?, ?, ?)"
+        )
+        .bind(username)
+        .bind(&password_hash)
+        .bind(email)
+        .bind(full_name)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    /// List all admin users
+    pub async fn list_admins(&self) -> Result<Vec<AdminUser>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, username, password_hash, email, full_name, created_at, last_login_at, is_active
+            FROM admin_users
+            ORDER BY created_at DESC
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let admins = rows
+            .into_iter()
+            .map(|row| AdminUser {
+                id: row.get("id"),
+                username: row.get("username"),
+                password_hash: row.get("password_hash"),
+                email: row.get("email"),
+                full_name: row.get("full_name"),
+                created_at: row.get("created_at"),
+                last_login_at: row.get("last_login_at"),
+                is_active: row.get("is_active"),
+            })
+            .collect();
+
+        Ok(admins)
+    }
+
+    /// Deactivate an admin user
+    pub async fn deactivate_admin(&self, username: &str) -> Result<()> {
+        sqlx::query("UPDATE admin_users SET is_active = 0 WHERE username = ?")
+            .bind(username)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Activate an admin user
+    pub async fn activate_admin(&self, username: &str) -> Result<()> {
+        sqlx::query("UPDATE admin_users SET is_active = 1 WHERE username = ?")
+            .bind(username)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 }
 

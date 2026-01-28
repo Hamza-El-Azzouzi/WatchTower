@@ -1,6 +1,5 @@
 use crate::config::DatabaseConfig;
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -8,6 +7,7 @@ use tokio::sync::Mutex;
 
 // Track previous stats for rate calculation
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct PreviousStats {
     xact_commit: u64,
     xact_rollback: u64,
@@ -65,6 +65,7 @@ impl DatabaseMetrics {
 
 pub struct DatabaseCollector {
     config: DatabaseConfig,
+    #[allow(dead_code)]
     previous_stats: Arc<Mutex<Option<PreviousStats>>>,
 }
 

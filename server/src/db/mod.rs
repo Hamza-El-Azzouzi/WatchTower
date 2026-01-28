@@ -37,7 +37,7 @@ impl Database {
         info!("Running database migrations");
 
         // Run migrations in order
-        let migrations = vec![
+        let migrations = [
             include_str!("../../migrations/001_initial_schema.sql"),
             include_str!("../../migrations/002_api_keys.sql"),
             include_str!("../../migrations/003_api_key_agent_limit.sql"),

@@ -212,8 +212,40 @@ async fn main() -> Result<()> {
         protected_routes
     };
 
+    // Public routes (no authentication required)
+    let public_routes = Router::new()
+        // Admin authentication endpoints (must be public)
+        .route("/api/v1/admin/login", post(api::admin_login))
+        .route("/api/v1/admin/validate", get(api::admin_validate))
+        // Admin management endpoints (require admin token)
+        .route(
+            "/api/v1/admin/change-password",
+            post(api::admin_change_password),
+        )
+        .route("/api/v1/admin/users", post(api::admin_create_user))
+        .route("/api/v1/admin/users", get(api::admin_list_users))
+        .route(
+            "/api/v1/admin/users/:username/deactivate",
+            post(api::admin_deactivate_user),
+        )
+        .route(
+            "/api/v1/admin/users/:username/activate",
+            post(api::admin_activate_user),
+        )
+        // Health check
+        .route("/health", get(api::health_check))
+        .route("/api/v1/health", get(api::system_health))
+        // API Key management (no auth required for creating the first key)
+        .route("/api/v1/auth/keys", post(api::create_api_key))
+        .route("/api/v1/auth/keys", get(api::list_api_keys))
+        .route(
+            "/api/v1/auth/keys/:key_id",
+            axum::routing::delete(api::revoke_api_key),
+        );
+
     let app = Router::new()
         .merge(protected_routes)
+        .merge(public_routes)
         // Read-only metrics endpoints (unprotected - used by dashboard)
         .route("/api/v1/metrics", get(api::query_metrics))
         .route("/api/v1/metrics/latest", get(api::get_latest_metrics))
@@ -246,16 +278,6 @@ async fn main() -> Result<()> {
         // Stats endpoints
         .route("/api/v1/stats", get(api::get_stats))
         .route("/api/v1/db/stats", get(api::get_database_stats))
-        // API Key management (no auth required for creating the first key)
-        .route("/api/v1/auth/keys", post(api::create_api_key))
-        .route("/api/v1/auth/keys", get(api::list_api_keys))
-        .route(
-            "/api/v1/auth/keys/:key_id",
-            axum::routing::delete(api::revoke_api_key),
-        )
-        // Health check
-        .route("/health", get(api::health_check))
-        .route("/api/v1/health", get(api::system_health))
         // Shared state
         .with_state(state)
         // Middleware

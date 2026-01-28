@@ -1030,6 +1030,356 @@ impl TimeSeriesStore {
 
 ---
 
+---
+
+## Authentication & Dashboard Access Control
+
+### Overview
+The monitoring system implements a comprehensive API key-based authentication system that ensures secure access to both the agent metrics ingestion and the web dashboard. This provides:
+
+- **Token-Based Authentication**: All API requests require a valid API key
+- **Dashboard Access Control**: Users must authenticate before accessing the dashboard
+- **Multi-Tenant Isolation**: Each API key can see only their associated agents and data
+- **Admin Dashboard**: Centralized management of API keys, agents, and usage statistics
+
+### Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                     Authentication Flow                         │
+└────────────────────────────────────────────────────────────────┘
+
+1. User Access Flow:
+   ┌─────────┐      ┌──────────┐      ┌───────────┐
+   │ Browser │─────▶│  Login   │─────▶│ Dashboard │
+   │         │      │   Page   │      │  (Auth'd) │
+   └─────────┘      └──────────┘      └───────────┘
+                          │
+                          │ Enter API Key
+                          ▼
+                    ┌──────────┐
+                    │ Validate │
+                    │   Key    │
+                    └──────────┘
+
+2. Agent Authentication:
+   ┌─────────┐      ┌──────────────┐      ┌────────────┐
+   │  Agent  │─────▶│ HTTP Request │─────▶│   Server   │
+   │         │      │ X-API-Key:   │      │  Validates │
+   └─────────┘      │ msk_xxx...   │      └────────────┘
+                    └──────────────┘
+```
+
+### Dashboard Authentication
+
+#### Login Page (`/login`)
+When accessing the dashboard, users are presented with a login page where they must enter their API key:
+
+**Features:**
+- Secure API key input (password field)
+- Validation against the server
+- Error handling for invalid keys
+- Automatic redirection after successful login
+- API key stored in browser's localStorage
+
+**Implementation:**
+```typescript
+// app/login/page.tsx
+const handleLogin = async (e: React.FormEvent) => {
+  e.preventDefault()
+  setLoading(true)
+  setError('')
+
+  try {
+    // Test the API key by making a request
+    const response = await fetch(`${API_BASE_URL}/api/v1/agents`, {
+      headers: { 'X-API-Key': apiKey }
+    })
+
+    if (response.ok) {
+      // Store API key in localStorage
+      localStorage.setItem('api_key', apiKey)
+      router.push('/')
+    } else {
+      setError('Invalid API key')
+    }
+  } catch (err) {
+    setError('Connection error')
+  } finally {
+    setLoading(false)
+  }
+}
+```
+
+#### Route Protection
+All dashboard routes are protected by the `AuthProvider` component:
+
+```typescript
+// components/AuthProvider.tsx
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const router = useRouter()
+  const pathname = usePathname()
+
+  useEffect(() => {
+    const apiKey = localStorage.getItem('api_key')
+    
+    // Redirect to login if no API key and not already on login page
+    if (!apiKey && pathname !== '/login') {
+      router.push('/login')
+    }
+  }, [pathname, router])
+
+  return <>{children}</>
+}
+```
+
+#### API Request Authentication
+All API requests include the API key in the `X-API-Key` header:
+
+```typescript
+// lib/auth-utils.ts
+export function getAuthHeaders(): HeadersInit {
+  const apiKey = localStorage.getItem('api_key')
+  return apiKey ? { 'X-API-Key': apiKey } : {}
+}
+
+// lib/api.ts
+export async function getAgents() {
+  const response = await fetch(`${API_BASE_URL}/api/v1/agents`, {
+    headers: getAuthHeaders()
+  })
+  return response.json()
+}
+```
+
+### Admin Dashboard
+
+#### Admin Overview (`/admin`)
+Centralized dashboard showing system-wide statistics:
+
+**Metrics Displayed:**
+- Total active API keys
+- Total agents (servers + databases)
+- Server agent count
+- Database agent count
+- Active alerts count
+
+**Features:**
+- Real-time statistics
+- Quick links to detailed pages
+- Visual distribution charts
+- Agent usage by API key
+- Key status monitoring
+
+#### API Key Management (`/admin/api-keys`)
+Comprehensive interface for managing authentication tokens:
+
+**Features:**
+1. **Generate New Keys**
+   - Custom key names
+   - Optional descriptions
+   - Expiration dates (7, 30, 90, 180, 365 days, or never)
+   - Agent limits (restrict how many agents can use the key)
+
+2. **View Key Details**
+   - Creation date and creator
+   - Last used timestamp
+   - Expiration status
+   - Active/Revoked/Expired status
+   - List of agents using the key
+
+3. **Key Actions**
+   - Copy key to clipboard
+   - Revoke keys (with confirmation)
+   - View usage statistics
+
+**Example: Creating an API Key**
+```typescript
+const createKey = async () => {
+  const response = await createApiKey({
+    name: 'production-web-servers',
+    description: 'Keys for all production web server agents',
+    expires_in_days: 90,
+    max_agents: 10
+  })
+  
+  // Response contains the generated key (only shown once)
+  console.log(response.key) // msk_prod_abc123...
+}
+```
+
+### Server-Side Authentication
+
+#### API Key Validation
+The server validates API keys on every request:
+
+```rust
+// server/src/middleware/auth.rs
+pub async fn auth_middleware(
+    req: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let auth_header = req.headers()
+        .get("Authorization")
+        .or_else(|| req.headers().get("X-API-Key"))
+        .and_then(|h| h.to_str().ok());
+
+    let api_key = match auth_header {
+        Some(key) if key.starts_with("Bearer ") => &key[7..],
+        Some(key) => key,
+        None => return Err(StatusCode::UNAUTHORIZED),
+    };
+
+    // Validate key against database
+    let auth_manager = req.extensions().get::<AuthManager>().unwrap();
+    match auth_manager.validate_api_key(api_key).await {
+        Ok(_) => Ok(next.run(req).await),
+        Err(_) => Err(StatusCode::FORBIDDEN),
+    }
+}
+```
+
+#### Data Isolation
+Each API key only has access to its associated agents and metrics:
+
+```rust
+// server/src/handlers/metrics.rs
+pub async fn get_agents(
+    Extension(auth): Extension<AuthContext>,
+    Extension(db): Extension<Database>,
+) -> Result<Json<Vec<Agent>>> {
+    // Only return agents associated with this API key
+    let agents = db.get_agents_by_api_key(&auth.api_key).await?;
+    Ok(Json(agents))
+}
+```
+
+### Database Schema
+
+```sql
+-- API Keys table
+CREATE TABLE api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP,
+    last_used_at TIMESTAMP,
+    revoked BOOLEAN DEFAULT FALSE,
+    revoked_at TIMESTAMP,
+    created_by TEXT NOT NULL,
+    max_agents INTEGER
+);
+
+-- Agent tracking with API keys
+CREATE TABLE agents (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    agent_type TEXT NOT NULL,
+    api_key_id INTEGER,
+    last_seen TIMESTAMP,
+    FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
+);
+```
+
+### Usage Examples
+
+#### 1. Setting Up a New API Key
+```bash
+# Create a new API key via the admin dashboard
+# Navigate to /admin/api-keys
+# Click "Generate New Key"
+# Enter:
+#   - Name: "production-servers"
+#   - Description: "Keys for production server agents"
+#   - Expires In: 90 days
+#   - Max Agents: 5
+# Copy the generated key: msk_prod_abc123xyz...
+```
+
+#### 2. Configuring an Agent
+```toml
+# agent.toml
+[agent]
+id = "web-server-01"
+name = "Production Web Server 1"
+agent_type = "server"
+
+[server]
+url = "https://monitoring.example.com"
+api_key = "msk_prod_abc123xyz..."
+
+[collection]
+interval_seconds = 15
+```
+
+#### 3. Accessing the Dashboard
+```bash
+# 1. Navigate to https://monitoring.example.com
+# 2. You'll be redirected to /login
+# 3. Enter your API key
+# 4. After validation, you'll see only your agents and metrics
+```
+
+#### 4. Logout
+```bash
+# Click the "Logout" button in the sidebar footer
+# This clears the API key from localStorage
+# You'll be redirected back to the login page
+```
+
+### Security Best Practices
+
+1. **Key Format**: API keys use the format `msk_<environment>_<random>`
+   - `msk_`: Prefix for "monitoring system key"
+   - Easy to identify in logs and code
+   - Prevents accidental commits (can be detected by secret scanners)
+
+2. **Key Storage**:
+   - **Server**: Keys are hashed using bcrypt before storage
+   - **Client**: Keys stored in localStorage (browser-only, not accessible to other domains)
+   - **Agent**: Keys stored in config file with restricted permissions (600)
+
+3. **Key Rotation**:
+   - Set expiration dates on all keys
+   - Regular rotation (90 days recommended)
+   - Revoke old keys after agent updates
+
+4. **Monitoring**:
+   - Track last_used_at for each key
+   - Alert on unused keys (potential security risk)
+   - Monitor for suspicious usage patterns
+
+### Logout Implementation
+
+Users can logout from the dashboard:
+
+```typescript
+// components/Sidebar.tsx
+<button 
+  onClick={() => {
+    localStorage.removeItem('api_key')
+    router.push('/login')
+  }}
+  className="logout-button"
+>
+  <LogOut className="w-5 h-5" />
+  <span>Logout</span>
+</button>
+```
+
+### Multi-Tenant Support
+
+The authentication system enables multi-tenant deployments:
+
+1. **Isolated Dashboards**: Each team/user sees only their agents
+2. **Usage Limits**: Control agent count per API key
+3. **Usage Tracking**: Monitor API key usage for billing or quotas
+4. **Admin Access**: Separate admin keys can view all agents
+
+---
+
 ## Security Considerations
 
 ### Agent Authentication

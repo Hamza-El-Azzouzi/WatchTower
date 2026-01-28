@@ -251,6 +251,7 @@ impl AlertManager {
     }
 
     // Alert Management
+    #[allow(dead_code)]
     pub async fn get_active_alerts(&self) -> Vec<Alert> {
         let alerts = self.alerts.read().await;
         alerts.values().filter(|a| a.is_active()).cloned().collect()
@@ -285,6 +286,7 @@ impl AlertManager {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn mark_notified(&self, alert_id: &str) {
         let mut alerts = self.alerts.write().await;
         if let Some(alert) = alerts.get_mut(alert_id) {

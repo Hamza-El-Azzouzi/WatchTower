@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 pub mod manager;
 
@@ -71,6 +70,7 @@ impl AlertSeverity {
         }
     }
 
+    #[allow(dead_code)]
     pub fn color(&self) -> u32 {
         match self {
             AlertSeverity::Info => 0x3b82f6,     // Blue

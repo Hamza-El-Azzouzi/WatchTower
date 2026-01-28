@@ -9,18 +9,18 @@ use std::sync::Arc;
 
 use crate::auth::AuthService;
 
-/// Extract API key from Authorization header
+/// Extract API key from Authorization or X-API-Key header
 fn extract_api_key(headers: &HeaderMap) -> Option<String> {
+    // Try X-API-Key header first (preferred for agents)
+    if let Some(key) = headers.get("X-API-Key").and_then(|v| v.to_str().ok()) {
+        return Some(key.to_string());
+    }
+
+    // Fall back to Authorization: Bearer format
     headers
         .get("Authorization")
         .and_then(|value| value.to_str().ok())
-        .and_then(|auth| {
-            if auth.starts_with("Bearer ") {
-                Some(auth[7..].to_string())
-            } else {
-                None
-            }
-        })
+        .and_then(|auth| auth.strip_prefix("Bearer ").map(|s| s.to_string()))
 }
 
 /// Middleware to validate API keys with agent limit enforcement
@@ -36,7 +36,7 @@ pub async fn auth_middleware(
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(serde_json::json!({
-                    "error": "Missing or invalid Authorization header. Expected: Authorization: Bearer <api-key>"
+                    "error": "Missing or invalid API key. Expected: X-API-Key header or Authorization: Bearer <api-key>"
                 })),
             ));
         }

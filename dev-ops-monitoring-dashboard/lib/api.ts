@@ -1,10 +1,12 @@
 import { Agent, LatestMetrics, HistoricalMetrics, Stats } from '@/types';
+import { getAuthHeaders } from './auth-utils';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
 export async function getAgents(): Promise<Agent[]> {
   try {
     const response = await fetch(`${API_BASE_URL}/api/v1/agents`, {
+      headers: getAuthHeaders(),
       next: { revalidate: 10 }
     });
     if (!response.ok) throw new Error(`Failed to fetch agents: ${response.status}`);
@@ -19,7 +21,10 @@ export async function getLatestMetrics(agentId: string): Promise<LatestMetrics> 
   try {
     const response = await fetch(
       `${API_BASE_URL}/api/v1/metrics/latest?agent_id=${agentId}`,
-      { next: { revalidate: 10 } }
+      { 
+        headers: getAuthHeaders(),
+        next: { revalidate: 10 } 
+      }
     );
     if (!response.ok) throw new Error(`Failed to fetch latest metrics: ${response.status}`);
     return response.json();
@@ -37,7 +42,10 @@ export async function getHistoricalMetrics(
   try {
     const response = await fetch(
       `${API_BASE_URL}/api/v1/metrics?agent_id=${agentId}&metric=${metric}&limit=${limit}`,
-      { next: { revalidate: 10 } }
+      { 
+        headers: getAuthHeaders(),
+        next: { revalidate: 10 } 
+      }
     );
     if (!response.ok) throw new Error(`Failed to fetch historical metrics: ${response.status}`);
     return response.json();
@@ -50,6 +58,7 @@ export async function getHistoricalMetrics(
 export async function getStats(): Promise<Stats> {
   try {
     const response = await fetch(`${API_BASE_URL}/api/v1/stats`, {
+      headers: getAuthHeaders(),
       next: { revalidate: 10 }
     });
     if (!response.ok) throw new Error(`Failed to fetch stats: ${response.status}`);

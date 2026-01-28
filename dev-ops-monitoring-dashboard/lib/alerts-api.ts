@@ -1,3 +1,5 @@
+import { getAuthHeaders } from './auth-utils';
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
 export interface AlertRule {
@@ -50,7 +52,9 @@ export interface AlertRulesResponse {
 }
 
 export async function getAlerts(): Promise<AlertsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/alerts`);
+  const response = await fetch(`${API_BASE_URL}/api/v1/alerts`, {
+    headers: getAuthHeaders()
+  });
   if (!response.ok) {
     throw new Error('Failed to fetch alerts');
   }
@@ -58,7 +62,9 @@ export async function getAlerts(): Promise<AlertsResponse> {
 }
 
 export async function getAlertRules(): Promise<AlertRulesResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/alert-rules`);
+  const response = await fetch(`${API_BASE_URL}/api/v1/alert-rules`, {
+    headers: getAuthHeaders()
+  });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: 'Failed to fetch alert rules' }));
     throw new Error(errorData.error || 'Failed to fetch alert rules');
@@ -71,6 +77,7 @@ export async function createAlertRule(rule: Omit<AlertRule, 'id' | 'created_at' 
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...getAuthHeaders()
     },
     body: JSON.stringify(rule),
   });
@@ -86,6 +93,7 @@ export async function createAlertRule(rule: Omit<AlertRule, 'id' | 'created_at' 
 export async function deleteAlertRule(ruleId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/api/v1/alert-rules/${ruleId}`, {
     method: 'DELETE',
+    headers: getAuthHeaders()
   });
   
   if (!response.ok) {
@@ -99,6 +107,7 @@ export async function updateAlertRule(ruleId: string, rule: Partial<Omit<AlertRu
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
+      ...getAuthHeaders()
     },
     body: JSON.stringify(rule),
   });
@@ -114,6 +123,7 @@ export async function updateAlertRule(ruleId: string, rule: Partial<Omit<AlertRu
 export async function toggleAlertRule(ruleId: string): Promise<AlertRule> {
   const response = await fetch(`${API_BASE_URL}/api/v1/alert-rules/${ruleId}/toggle`, {
     method: 'POST',
+    headers: getAuthHeaders()
   });
   
   if (!response.ok) {
@@ -128,6 +138,7 @@ export async function acknowledgeAlert(alertId: string, acknowledgedBy: string):
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...getAuthHeaders()
     },
     body: JSON.stringify({ acknowledged_by: acknowledgedBy }),
   });
