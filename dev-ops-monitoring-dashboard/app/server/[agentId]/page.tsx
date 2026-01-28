@@ -7,6 +7,7 @@ import { ArrowLeft, AlertCircle, Loader } from 'lucide-react';
 import StatusBadge from '@/components/StatusBadge';
 import MetricsSection from '@/components/MetricsSection';
 import ChartsSection from '@/components/ChartsSection';
+import AlertThresholdChart from '@/components/AlertThresholdChart';
 import { getAgents, getLatestMetrics } from '@/lib/api';
 import { formatRelativeTime } from '@/lib/metrics-utils';
 import { Agent, LatestMetrics } from '@/types';
@@ -14,7 +15,7 @@ import { Agent, LatestMetrics } from '@/types';
 export default function ServerDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const agentId = params.agentId as string;
+  const agentId = decodeURIComponent(params.agentId as string);
 
   const [agent, setAgent] = useState<Agent | null>(null);
   const [metrics, setMetrics] = useState<LatestMetrics | null>(null);
@@ -22,9 +23,15 @@ export default function ServerDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let isInitialLoad = true;
+
     const fetchData = async () => {
       try {
-        setLoading(true);
+        // Only show loading state on initial load, not on refreshes
+        if (isInitialLoad) {
+          setLoading(true);
+        }
+        
         const agents = await getAgents();
         const foundAgent = agents.find(a => a.id === agentId);
 
@@ -41,7 +48,10 @@ export default function ServerDetailPage() {
       } catch {
         setError('Failed to load server details');
       } finally {
-        setLoading(false);
+        if (isInitialLoad) {
+          setLoading(false);
+          isInitialLoad = false;
+        }
       }
     };
 
@@ -102,6 +112,34 @@ export default function ServerDetailPage() {
           <>
             <h2 className="text-2xl font-bold text-foreground mb-6">Current Metrics</h2>
             <MetricsSection metrics={metrics} loading={loading} />
+
+            <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Alert Thresholds</h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-12">
+              <AlertThresholdChart
+                agentId={agentId}
+                metric="cpu_usage"
+                title="CPU Usage with Thresholds"
+                warningThreshold={70}
+                criticalThreshold={90}
+                limit={100}
+              />
+              <AlertThresholdChart
+                agentId={agentId}
+                metric="memory_usage"
+                title="Memory Usage with Thresholds"
+                warningThreshold={75}
+                criticalThreshold={90}
+                limit={100}
+              />
+              <AlertThresholdChart
+                agentId={agentId}
+                metric="disk_usage"
+                title="Disk Usage with Thresholds"
+                warningThreshold={80}
+                criticalThreshold={95}
+                limit={100}
+              />
+            </div>
 
             <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Historical Charts</h2>
             <ChartsSection agentId={agentId} />

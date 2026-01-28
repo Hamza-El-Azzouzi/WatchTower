@@ -1,4 +1,5 @@
 mod collector;
+mod collectors;
 mod config;
 mod sender;
 
@@ -14,6 +15,7 @@ use collector::{
     cpu::CpuCollector, disk::DiskCollector, memory::MemoryCollector, network::NetworkCollector,
     SystemMetrics,
 };
+use collectors::database::DatabaseCollector;
 use config::Config;
 use sender::{MetricsPayload, MetricsSender};
 
@@ -106,14 +108,43 @@ async fn run_agent(config: Config) -> Result<()> {
         config.metrics.collect_network
     );
 
+    // Initialize database collector if enabled
+    let db_collector = if let Some(ref db_config) = config.database {
+        if db_config.enabled {
+            info!(
+                "Database monitoring enabled - {} at {}:{}",
+                db_config.db_type, db_config.host, db_config.port
+            );
+            match DatabaseCollector::new(db_config.clone()) {
+                Ok(collector) => Some(collector),
+                Err(e) => {
+                    warn!("Failed to initialize database collector: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Initialize metrics sender if server is enabled
     let sender = if config.server.enabled {
         info!(
             "Server integration enabled - sending metrics to {}",
             config.server.url
         );
+        if config.server.api_key.is_some() {
+            info!("API key authentication enabled");
+        } else {
+            warn!(
+                "No API key configured - server may reject metrics if authentication is required"
+            );
+        }
         Some(MetricsSender::new(
             config.server.url.clone(),
+            config.server.api_key.clone(),
             config.server.retry_attempts,
             config.server.retry_delay_seconds,
         )?)
@@ -156,6 +187,14 @@ async fn run_agent(config: Config) -> Result<()> {
             metrics_map.insert("memory_usage".to_string(), metrics.memory_percent as f64);
             metrics_map.insert("disk_usage".to_string(), metrics.disk_percent as f64);
             metrics_map.insert(
+                "disk_used_bytes".to_string(),
+                metrics.disk_used_bytes as f64,
+            );
+            metrics_map.insert(
+                "disk_total_bytes".to_string(),
+                metrics.disk_total_bytes as f64,
+            );
+            metrics_map.insert(
                 "network_rx_bytes".to_string(),
                 metrics.network_rx_bytes as f64,
             );
@@ -163,6 +202,21 @@ async fn run_agent(config: Config) -> Result<()> {
                 "network_tx_bytes".to_string(),
                 metrics.network_tx_bytes as f64,
             );
+
+            // Collect database metrics if database collector is enabled
+            if let Some(ref db_collector) = db_collector {
+                match db_collector.collect().await {
+                    Ok(db_metrics) => {
+                        // Add all database metrics to the map
+                        for (key, value) in db_metrics.to_hashmap() {
+                            metrics_map.insert(key, value);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to collect database metrics: {}", e);
+                    }
+                }
+            }
 
             let payload = MetricsPayload {
                 agent_id: config.agent.name.clone(),

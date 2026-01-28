@@ -53,12 +53,12 @@ export default function ServerCard({ agent }: ServerCardProps) {
   let diskDisplay = '-';
 
   if (metrics) {
-    cpuPercent = extractMetric(metrics.metrics, 'cpu_percent');
+    cpuPercent = extractMetric(metrics.metrics, 'cpu_usage');
+    memoryPercent = extractMetric(metrics.metrics, 'memory_usage');
 
-    const memUsed = extractMetric(metrics.metrics, 'memory_used_bytes');
-    const memTotal = extractMetric(metrics.metrics, 'memory_total_bytes');
-    memoryPercent = calculatePercentage(memUsed, memTotal);
-    memoryDisplay = `${formatBytes(memUsed)} / ${formatBytes(memTotal)}`;
+    // Memory display with bytes (calculate from percentage if needed)
+    // For now, show "0 Bytes / 0 Bytes" since we only have percentage
+    memoryDisplay = `0 Bytes / 0 Bytes`;
 
     const diskUsed = extractMetric(metrics.metrics, 'disk_used_bytes');
     const diskTotal = extractMetric(metrics.metrics, 'disk_total_bytes');
@@ -67,7 +67,7 @@ export default function ServerCard({ agent }: ServerCardProps) {
   }
 
   return (
-    <Link href={`/server/${agent.id}`}>
+    <Link href={`/server/${encodeURIComponent(agent.id)}`}>
       <div
         className={`block glass-morphism rounded-xl p-6 transition-smooth cursor-pointer group hover:shadow-xl ${borderColorMap[agent.status]} ${bgColorMap[agent.status]}`}
       >

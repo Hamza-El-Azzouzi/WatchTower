@@ -16,12 +16,13 @@ pub struct MetricsPayload {
 pub struct MetricsSender {
     client: Client,
     server_url: String,
+    api_key: Option<String>,
     retry_attempts: u32,
     retry_delay: Duration,
 }
 
 impl MetricsSender {
-    pub fn new(server_url: String, retry_attempts: u32, retry_delay_seconds: u64) -> Result<Self> {
+    pub fn new(server_url: String, api_key: Option<String>, retry_attempts: u32, retry_delay_seconds: u64) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
@@ -30,13 +31,17 @@ impl MetricsSender {
         Ok(Self {
             client,
             server_url,
+            api_key,
             retry_attempts,
             retry_delay: Duration::from_secs(retry_delay_seconds),
         })
     }
 
     pub async fn send_metrics(&self, payload: &MetricsPayload) -> Result<()> {
-        let endpoint = format!("{}/api/v1/metrics", self.server_url);
+        let endpoint = format!(
+            "{}/api/v1/metrics?agent_id={}",
+            self.server_url, payload.agent_id
+        );
         let mut last_error = None;
 
         for attempt in 1..=self.retry_attempts {
@@ -45,7 +50,14 @@ impl MetricsSender {
                 endpoint, attempt, self.retry_attempts
             );
 
-            match self.client.post(&endpoint).json(payload).send().await {
+            let mut request = self.client.post(&endpoint).json(payload);
+
+            // Add Authorization header if API key is provided
+            if let Some(ref api_key) = self.api_key {
+                request = request.header("Authorization", format!("Bearer {}", api_key));
+            }
+
+            match request.send().await {
                 Ok(response) => {
                     let status = response.status();
                     if status.is_success() {
@@ -90,7 +102,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sender_creation() {
-        let sender = MetricsSender::new("http://localhost:8080".to_string(), 3, 2);
+        let sender = MetricsSender::new("http://localhost:8080".to_string(), None, 3, 2);
         assert!(sender.is_ok());
     }
 }

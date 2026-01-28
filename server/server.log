@@ -1,0 +1,290 @@
+nohup: ignoring input
+warning: unused import: `std::collections::HashMap`
+ --> src/alerts/mod.rs:3:5
+  |
+3 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `error`
+  --> src/api/mod.rs:10:15
+   |
+10 | use tracing::{error, info};
+   |               ^^^^^
+
+warning: unused import: `AgentStatus`
+ --> src/storage/mod.rs:4:12
+  |
+4 |     Agent, AgentStatus, DataPoint, MetricsPayload, StorageStats, TimeSeriesStore,
+  |            ^^^^^^^^^^^
+
+warning: method `color` is never used
+  --> src/alerts/mod.rs:74:12
+   |
+65 | impl AlertSeverity {
+   | ------------------ method in this implementation
+...
+74 |     pub fn color(&self) -> u32 {
+   |            ^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `get_active_alerts` and `mark_notified` are never used
+   --> src/alerts/manager.rs:248:18
+    |
+ 19 | impl AlertManager {
+    | ----------------- methods in this implementation
+...
+248 |     pub async fn get_active_alerts(&self) -> Vec<Alert> {
+    |                  ^^^^^^^^^^^^^^^^^
+...
+282 |     pub async fn mark_notified(&self, alert_id: &str) {
+    |                  ^^^^^^^^^^^^^
+
+warning: variant `InternalError` is never constructed
+  --> src/api/mod.rs:35:5
+   |
+33 | pub enum ApiError {
+   |          -------- variant in this enum
+34 |     BadRequest(String),
+35 |     InternalError(String),
+   |     ^^^^^^^^^^^^^
+   |
+   = note: `ApiError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: `monitor-server` (bin "monitor-server") generated 6 warnings (run `cargo fix --bin "monitor-server" -p monitor-server` to apply 3 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.09s
+     Running `target/release/monitor-server`
+[2m2026-01-28T13:31:57.237354Z[0m [32m INFO[0m No configuration file specified, using defaults
+[2m2026-01-28T13:31:57.237430Z[0m [32m INFO[0m Initialized time-series storage with max 10000 points per metric
+[2m2026-01-28T13:31:57.237438Z[0m [32m INFO[0m Initialized alert manager
+[2m2026-01-28T13:31:57.237751Z[0m [32m INFO[0m Starting server on 0.0.0.0:8080
+[2m2026-01-28T13:31:57.237762Z[0m [32m INFO[0m 
+[2m2026-01-28T13:31:57.237764Z[0m [32m INFO[0m API Endpoints:
+[2m2026-01-28T13:31:57.237766Z[0m [32m INFO[0m   POST   /api/v1/metrics         - Ingest metrics from agents
+[2m2026-01-28T13:31:57.237768Z[0m [32m INFO[0m   GET    /api/v1/metrics         - Query historical metrics
+[2m2026-01-28T13:31:57.237771Z[0m [32m INFO[0m   GET    /api/v1/metrics/latest  - Get latest metrics
+[2m2026-01-28T13:31:57.237773Z[0m [32m INFO[0m   GET    /api/v1/agents          - List all agents
+[2m2026-01-28T13:31:57.237774Z[0m [32m INFO[0m   GET    /api/v1/agents/:id      - Get agent details
+[2m2026-01-28T13:31:57.237776Z[0m [32m INFO[0m   GET    /api/v1/stats           - Storage statistics
+[2m2026-01-28T13:31:57.237778Z[0m [32m INFO[0m   GET    /health                 - Health check
+[2m2026-01-28T13:31:57.237780Z[0m [32m INFO[0m 
+[2m2026-01-28T13:31:57.238834Z[0m [32m INFO[0m Cleaned up old resolved alerts
+[2m2026-01-28T13:31:57.520926Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:31:59.779835Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:32:02.656158Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:32:03.776887Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:32:06.069437Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:32:06.100654Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:32:06.103451Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:32:12.520377Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:32:13.775704Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:32:17.655195Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:32:21.068881Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:32:21.098428Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:32:21.102214Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:32:23.776329Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:32:27.520983Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:32:32.655275Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:32:33.776499Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:32:36.064574Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:32:36.097640Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:32:36.102303Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:32:42.519749Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:32:43.776613Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:32:47.655063Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:32:51.065397Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:32:51.099395Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:32:51.104034Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:32:53.776541Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:32:57.521059Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:33:02.655884Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:33:03.776700Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:33:06.064381Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:33:06.097484Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:33:06.101659Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:33:12.520516Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:33:13.775793Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:33:17.654351Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:33:21.063890Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:33:21.097353Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:33:21.101290Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:33:23.776475Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:33:27.524285Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:33:32.410375Z[0m [32m INFO[0m Creating new alert rule: hight cpu
+[2m2026-01-28T13:33:32.660671Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:33:33.776380Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:33:36.065095Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:33:36.096578Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:33:36.101022Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:33:36.336248Z[0m [32m INFO[0m Toggling alert rule: 843f39e5-cf15-4452-9df7-e2572dc091f1
+[2m2026-01-28T13:33:42.520671Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:33:43.776732Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:33:47.654861Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:33:51.063662Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:33:51.095918Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:33:51.101924Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:33:53.776351Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:33:57.520795Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:34:02.654850Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:34:03.775982Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:34:06.063536Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:34:06.096585Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:34:06.101994Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:34:12.520715Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:34:13.777449Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:34:17.654356Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:34:21.063357Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:34:21.096412Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:34:21.103060Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:34:23.775821Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:34:27.520902Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:34:32.655833Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:34:33.776144Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:34:36.074368Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:34:36.100651Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:34:36.107694Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:34:42.520717Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:34:43.776078Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:34:47.654150Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:34:51.064427Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:34:51.097518Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:34:51.105056Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:34:53.775968Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:34:57.520992Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:35:02.655102Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:35:03.776331Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:35:06.063582Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:35:06.096274Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:35:06.102043Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:35:12.529041Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:35:13.776768Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:35:17.654977Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:35:21.063654Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:35:21.096528Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:35:21.102758Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:35:23.776488Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:35:27.520832Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:35:32.655026Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:35:33.776429Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:35:36.067454Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:35:36.096636Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:35:36.108112Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:35:42.520235Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:35:43.776468Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:35:47.655635Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:35:51.063436Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:35:51.096364Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:35:51.104443Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:35:53.776368Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:35:57.520183Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:36:02.654934Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:36:03.776018Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:36:06.062824Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:36:06.096429Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:36:06.101700Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:36:12.521027Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:36:13.776359Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:36:17.655954Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:36:21.063325Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:36:21.096513Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:36:21.101753Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:36:23.776340Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:36:27.520538Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:36:32.655596Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:36:33.776857Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:36:36.064142Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:36:36.096631Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:36:36.103100Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:36:42.520677Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:36:43.775677Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:36:47.655415Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:36:51.063477Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:36:51.098370Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:36:51.102274Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:36:53.776116Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:36:57.521494Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:37:02.654209Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:37:03.777673Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:37:06.062998Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:37:06.096316Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:37:06.100756Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:37:12.520428Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:37:13.776283Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:37:17.655682Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:37:21.063414Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:37:21.096395Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:37:21.100803Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:37:23.776307Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:37:27.520865Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:37:32.654398Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:37:33.775774Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:37:36.067018Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:37:36.096343Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:37:36.101369Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:37:42.521710Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:37:43.776137Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:37:47.655027Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:37:51.063861Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:37:51.095977Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:37:51.103495Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:37:53.777029Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:37:57.529098Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:38:02.655413Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:38:03.776496Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:38:06.063905Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:38:06.097962Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:38:06.103975Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:38:12.520723Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:38:13.776751Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:38:17.655877Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:38:21.063526Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:38:21.096435Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:38:21.101807Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:38:23.776751Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:38:27.521403Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:38:32.654968Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:38:33.777263Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:38:36.063527Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:38:36.096995Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:38:36.103949Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:38:42.522074Z[0m [32m INFO[0m Received metrics from agent '01Blog-db' with 17 metrics
+[2m2026-01-28T13:38:43.775918Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:38:46.272308Z[0m [32m INFO[0m Listing all registered agents
+[2m2026-01-28T13:38:46.275724Z[0m [32m INFO[0m Listing all registered agents
+[2m2026-01-28T13:38:46.280821Z[0m [32m INFO[0m Getting latest metrics for agent '01Blog-db'
+[2m2026-01-28T13:38:46.280945Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-db-01'
+[2m2026-01-28T13:38:46.281133Z[0m [32m INFO[0m Getting latest metrics for agent 'hkhlifi PC'
+[2m2026-01-28T13:38:46.281935Z[0m [32m INFO[0m Getting latest metrics for agent '01blog-abdeladim'
+[2m2026-01-28T13:38:46.282178Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-api-01'
+[2m2026-01-28T13:38:46.282274Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-web-01'
+[2m2026-01-28T13:38:46.287987Z[0m [32m INFO[0m Getting latest metrics for agent '01blog-abdeladim'
+[2m2026-01-28T13:38:46.288306Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-api-01'
+[2m2026-01-28T13:38:46.288405Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-db-01'
+[2m2026-01-28T13:38:46.288424Z[0m [32m INFO[0m Getting latest metrics for agent '01Blog-db'
+[2m2026-01-28T13:38:46.288466Z[0m [32m INFO[0m Getting latest metrics for agent 'hkhlifi PC'
+[2m2026-01-28T13:38:46.295512Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-web-01'
+[2m2026-01-28T13:38:47.655033Z[0m [32m INFO[0m Received metrics from agent '01blog-abdeladim' with 17 metrics
+[2m2026-01-28T13:38:48.487380Z[0m [32m INFO[0m Listing all registered agents
+[2m2026-01-28T13:38:48.488063Z[0m [32m INFO[0m Listing all registered agents
+[2m2026-01-28T13:38:48.512859Z[0m [32m INFO[0m Getting latest metrics for agent '01Blog-db'
+[2m2026-01-28T13:38:48.517342Z[0m [32m INFO[0m Getting latest metrics for agent '01Blog-db'
+[2m2026-01-28T13:38:51.062831Z[0m [32m INFO[0m Received metrics from agent 'docker-db-01' with 7 metrics
+[2m2026-01-28T13:38:51.096974Z[0m [32m INFO[0m Received metrics from agent 'docker-api-01' with 7 metrics
+[2m2026-01-28T13:38:51.102751Z[0m [32m INFO[0m Received metrics from agent 'docker-web-01' with 7 metrics
+[2m2026-01-28T13:38:53.776516Z[0m [32m INFO[0m Received metrics from agent 'hkhlifi PC' with 7 metrics
+[2m2026-01-28T13:38:55.146993Z[0m [32m INFO[0m Listing all registered agents
+[2m2026-01-28T13:38:55.147290Z[0m [32m INFO[0m Listing all registered agents
+[2m2026-01-28T13:38:55.155334Z[0m [32m INFO[0m Getting latest metrics for agent '01Blog-db'
+[2m2026-01-28T13:38:55.155813Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-db-01'
+[2m2026-01-28T13:38:55.155870Z[0m [32m INFO[0m Getting latest metrics for agent 'hkhlifi PC'
+[2m2026-01-28T13:38:55.156028Z[0m [32m INFO[0m Getting latest metrics for agent '01blog-abdeladim'
+[2m2026-01-28T13:38:55.156081Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-api-01'
+[2m2026-01-28T13:38:55.156181Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-web-01'
+[2m2026-01-28T13:38:55.162294Z[0m [32m INFO[0m Getting latest metrics for agent '01Blog-db'
+[2m2026-01-28T13:38:55.162422Z[0m [32m INFO[0m Getting latest metrics for agent '01blog-abdeladim'
+[2m2026-01-28T13:38:55.162470Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-db-01'
+[2m2026-01-28T13:38:55.162482Z[0m [32m INFO[0m Getting latest metrics for agent 'hkhlifi PC'
+[2m2026-01-28T13:38:55.162512Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-api-01'
+[2m2026-01-28T13:38:55.162579Z[0m [32m INFO[0m Getting latest metrics for agent 'docker-web-01'

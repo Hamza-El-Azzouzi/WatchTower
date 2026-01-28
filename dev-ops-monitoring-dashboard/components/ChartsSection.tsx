@@ -51,16 +51,22 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
   };
 
   useEffect(() => {
+    let isInitialLoad = true;
+
     const fetchChartData = async () => {
       try {
-        setLoading(true);
+        // Only show loading on initial mount, not refreshes
+        if (isInitialLoad) {
+          setLoading(true);
+        }
+        
         const limit = getLimitForTimeRange(timeRange);
 
         // Fetch all metric data in parallel
         const [cpuRes, memoryRes, diskRes, networkRxRes, networkTxRes] = await Promise.all([
-          getHistoricalMetrics(agentId, 'cpu_percent', limit),
-          getHistoricalMetrics(agentId, 'memory_used_bytes', limit),
-          getHistoricalMetrics(agentId, 'disk_used_bytes', limit),
+          getHistoricalMetrics(agentId, 'cpu_usage', limit),
+          getHistoricalMetrics(agentId, 'memory_usage', limit),
+          getHistoricalMetrics(agentId, 'disk_usage', limit),
           getHistoricalMetrics(agentId, 'network_rx_bytes', limit),
           getHistoricalMetrics(agentId, 'network_tx_bytes', limit),
         ]);
@@ -72,25 +78,17 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
         }));
         setCpuData(cpuChartData);
 
-        // Process Memory data
-        const memTotalRes = await getHistoricalMetrics(agentId, 'memory_total_bytes', limit);
-        const memoryChartData = memoryRes.data_points.map((point: DataPoint, idx: number) => ({
+        // Process Memory data (percentage values)
+        const memoryChartData = memoryRes.data_points.map((point: DataPoint) => ({
           timestamp: formatChartTime(point.timestamp),
-          used: Number((point.value / (1024 * 1024 * 1024)).toFixed(2)),
-          total: Number(
-            (memTotalRes.data_points[idx]?.value / (1024 * 1024 * 1024) || 0).toFixed(2)
-          ),
+          usage: Number(point.value.toFixed(2)),
         }));
         setMemoryData(memoryChartData);
 
-        // Process Disk data
-        const diskTotalRes = await getHistoricalMetrics(agentId, 'disk_total_bytes', limit);
-        const diskChartData = diskRes.data_points.map((point: DataPoint, idx: number) => ({
+        // Process Disk data (percentage values)
+        const diskChartData = diskRes.data_points.map((point: DataPoint) => ({
           timestamp: formatChartTime(point.timestamp),
-          used: Number((point.value / (1024 * 1024 * 1024)).toFixed(2)),
-          total: Number(
-            (diskTotalRes.data_points[idx]?.value / (1024 * 1024 * 1024) || 0).toFixed(2)
-          ),
+          usage: Number(point.value.toFixed(2)),
         }));
         setDiskData(diskChartData);
 
@@ -108,11 +106,18 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
       } catch {
         setError('Failed to load chart data');
       } finally {
-        setLoading(false);
+        if (isInitialLoad) {
+          setLoading(false);
+          isInitialLoad = false;
+        }
       }
     };
 
     fetchChartData();
+    
+    // Auto-refresh every 10 seconds
+    const interval = setInterval(fetchChartData, 10000);
+    return () => clearInterval(interval);
   }, [agentId, timeRange]);
 
   const timeRangeButtons = ['1h', '6h', '24h', '7d'] as const;
@@ -165,7 +170,9 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
                   stroke="#3b82f6"
                   dot={false}
                   strokeWidth={2}
-                  isAnimationActive={false}
+                  isAnimationActive={true}
+                  animationDuration={800}
+                  animationEasing="ease-in-out"
                 />
               </LineChart>
             </ResponsiveContainer>
@@ -181,32 +188,22 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
             skeletonLoader
           ) : memoryData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={memoryData}>
+              <AreaChart data={memoryData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
                 <XAxis dataKey="timestamp" stroke="#9ca3af" style={{ fontSize: '12px' }} />
-                <YAxis stroke="#9ca3af" style={{ fontSize: '12px' }} label={{ value: 'GB', angle: -90, position: 'insideLeft' }} />
+                <YAxis stroke="#9ca3af" style={{ fontSize: '12px' }} domain={[0, 100]} label={{ value: '%', angle: -90, position: 'insideLeft' }} />
                 <Tooltip contentStyle={{ backgroundColor: 'rgba(26,26,26,0.95)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: '8px', color: '#f5f5f5' }} />
-                <Legend wrapperStyle={{ color: '#9ca3af' }} />
-                <Line
+                <Area
                   type="monotone"
-                  dataKey="used"
+                  dataKey="usage"
                   stroke="#10b981"
-                  name="Used"
-                  dot={false}
-                  strokeWidth={2}
-                  isAnimationActive={false}
+                  fill="#10b981"
+                  fillOpacity={0.3}
+                  isAnimationActive={true}
+                  animationDuration={800}
+                  animationEasing="ease-in-out"
                 />
-                <Line
-                  type="monotone"
-                  dataKey="total"
-                  stroke="#64748b"
-                  name="Total"
-                  strokeDasharray="5 5"
-                  dot={false}
-                  strokeWidth={2}
-                  isAnimationActive={false}
-                />
-              </LineChart>
+              </AreaChart>
             </ResponsiveContainer>
           ) : (
             <p className="text-muted-foreground">No data available</p>
@@ -223,15 +220,17 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
               <AreaChart data={diskData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
                 <XAxis dataKey="timestamp" stroke="#9ca3af" style={{ fontSize: '12px' }} />
-                <YAxis stroke="#9ca3af" style={{ fontSize: '12px' }} label={{ value: 'GB', angle: -90, position: 'insideLeft' }} />
+                <YAxis stroke="#9ca3af" style={{ fontSize: '12px' }} domain={[0, 100]} label={{ value: '%', angle: -90, position: 'insideLeft' }} />
                 <Tooltip contentStyle={{ backgroundColor: 'rgba(26,26,26,0.95)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: '8px', color: '#f5f5f5' }} />
                 <Area
                   type="monotone"
-                  dataKey="used"
+                  dataKey="usage"
                   stroke="#f59e0b"
                   fill="#f59e0b"
                   fillOpacity={0.3}
-                  isAnimationActive={false}
+                  isAnimationActive={true}
+                  animationDuration={800}
+                  animationEasing="ease-in-out"
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -260,7 +259,9 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
                   name="RX (Download)"
                   dot={false}
                   strokeWidth={2}
-                  isAnimationActive={false}
+                  isAnimationActive={true}
+                  animationDuration={800}
+                  animationEasing="ease-in-out"
                 />
                 <Line
                   type="monotone"
@@ -269,7 +270,9 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
                   name="TX (Upload)"
                   dot={false}
                   strokeWidth={2}
-                  isAnimationActive={false}
+                  isAnimationActive={true}
+                  animationDuration={800}
+                  animationEasing="ease-in-out"
                 />
               </LineChart>
             </ResponsiveContainer>

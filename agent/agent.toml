@@ -11,6 +11,7 @@ collect_disk = true
 collect_network = true
 [server]
 enabled = true
-url = "http://localhost:8080"
+url = "http://10.1.5.1:8080"
+api_key = "msk_XFwSuHsgoSxPyMa32WHPcrjM6iYQBuTEcFhBlmJqiLw"  # Get from admin dashboard: http://localhost:3000/admin/api-keys
 retry_attempts = 3
 retry_delay_seconds = 2

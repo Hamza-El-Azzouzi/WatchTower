@@ -1,0 +1,26 @@
+[agent]
+name = "local-test-db"
+
+[collection]
+interval_seconds = 10
+
+[metrics]
+collect_cpu = true
+collect_memory = true
+collect_disk = true
+collect_network = true
+
+[server]
+enabled = true
+url = "http://10.1.5.1:8080"
+retry_attempts = 3
+retry_delay_seconds = 2
+
+[database]
+enabled = true
+db_type = "postgres"
+host = "localhost"
+port = 5432
+database = "testdb"
+username = "testuser"
+password = "testpass"

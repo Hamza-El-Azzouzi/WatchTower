@@ -1,0 +1,39 @@
+# DevOps Monitoring System - Server Configuration Example
+
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[storage]
+# Maximum number of data points to keep per metric in memory
+max_points_per_metric = 10000
+
+[database]
+# Enable persistent database storage (SQLite)
+enabled = true
+# Database connection URL
+# For SQLite: "sqlite:path/to/database.db"
+# For PostgreSQL: "postgres://user:password@localhost/dbname"
+url = "sqlite:monitoring.db"
+
+[retention]
+# How long to keep metrics in the database (in hours)
+# Default: 720 hours (30 days)
+metrics_hours = 720
+
+# How long to keep alerts in the database (in days)
+# Default: 90 days
+alerts_days = 90
+
+# How often to run cleanup (in hours)
+# Default: 24 hours (daily)
+cleanup_interval_hours = 24
+
+[auth]
+# Enable authentication features
+enabled = true
+
+# Require API key for all agent requests
+# If false, API keys are optional (useful for testing)
+# If true, all metrics ingestion requires valid API key
+require_api_key = false

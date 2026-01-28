@@ -5,6 +5,7 @@ import PageHeader from '@/components/PageHeader';
 import HeroBanner from '@/components/HeroBanner';
 import StatsCards from '@/components/StatsCards';
 import ServerCard from '@/components/ServerCard';
+import SystemHealthOverview from '@/components/SystemHealthOverview';
 import { getAgents } from '@/lib/api';
 import { Agent } from '@/types';
 import { AlertCircle, Loader } from 'lucide-react';
@@ -71,11 +72,20 @@ export default function OverviewPage() {
                 <p className="text-sm text-muted-foreground">Make sure the API is running and has agents registered.</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {agents.map(agent => (
-                  <ServerCard key={agent.id} agent={agent} />
-                ))}
-              </div>
+              <>
+                {/* System Health Overview Section */}
+                <div className="mb-12">
+                  <SystemHealthOverview agents={agents} />
+                </div>
+
+                {/* Server Cards Grid */}
+                <h2 className="text-2xl font-bold text-foreground mb-6">All Servers</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {agents.map(agent => (
+                    <ServerCard key={agent.id} agent={agent} />
+                  ))}
+                </div>
+              </>
             )}
 
             <div className="mt-12 pt-8 border-t border-border flex items-center justify-between">

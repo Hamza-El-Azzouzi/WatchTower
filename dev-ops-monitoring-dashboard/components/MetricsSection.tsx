@@ -1,5 +1,6 @@
 'use client';
 
+import { memo } from 'react';
 import { Activity, Database, HardDrive, Wifi } from 'lucide-react';
 import MetricCard from './MetricCard';
 import { LatestMetrics } from '@/types';
@@ -10,7 +11,7 @@ interface MetricsSectionProps {
   loading: boolean;
 }
 
-export default function MetricsSection({ metrics, loading }: MetricsSectionProps) {
+function MetricsSection({ metrics, loading }: MetricsSectionProps) {
   let cpuPercent = 0;
   let memUsed = 0;
   let memTotal = 0;
@@ -22,15 +23,18 @@ export default function MetricsSection({ metrics, loading }: MetricsSectionProps
   let networkTx = 0;
 
   if (metrics) {
-    cpuPercent = extractMetric(metrics.metrics, 'cpu_percent');
+    // Agent sends percentage values directly
+    cpuPercent = extractMetric(metrics.metrics, 'cpu_usage');
+    memPercent = extractMetric(metrics.metrics, 'memory_usage');
+    diskPercent = extractMetric(metrics.metrics, 'disk_usage');
 
-    memUsed = extractMetric(metrics.metrics, 'memory_used_bytes');
-    memTotal = extractMetric(metrics.metrics, 'memory_total_bytes');
-    memPercent = calculatePercentage(memUsed, memTotal);
-
+    // Extract disk space in bytes
     diskUsed = extractMetric(metrics.metrics, 'disk_used_bytes');
     diskTotal = extractMetric(metrics.metrics, 'disk_total_bytes');
-    diskPercent = calculatePercentage(diskUsed, diskTotal);
+
+    // For display, we'll show percentages for memory since agent only sends percentage
+    memUsed = memPercent;
+    memTotal = 100;
 
     networkRx = extractMetric(metrics.metrics, 'network_rx_bytes');
     networkTx = extractMetric(metrics.metrics, 'network_tx_bytes');
@@ -67,12 +71,12 @@ export default function MetricsSection({ metrics, loading }: MetricsSectionProps
 
           <MetricCard
             label="Memory Usage"
-            value={formatBytes(memUsed)}
-            unit={`/ ${formatBytes(memTotal)}`}
+            value={memPercent.toFixed(1)}
+            unit="%"
             percentage={memPercent}
             color={memColor}
             icon={<Database className="w-6 h-6" />}
-            secondaryValue={`${memPercent.toFixed(1)}% used`}
+            secondaryValue={memPercent < 75 ? 'Healthy' : memPercent < 90 ? 'Warning' : 'Critical'}
             size="md"
           />
 
@@ -101,3 +105,5 @@ export default function MetricsSection({ metrics, loading }: MetricsSectionProps
     </div>
   );
 }
+
+export default memo(MetricsSection);

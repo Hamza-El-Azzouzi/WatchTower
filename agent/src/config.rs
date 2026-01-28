@@ -10,6 +10,19 @@ pub struct Config {
     pub metrics: MetricsConfig,
     #[serde(default)]
     pub server: ServerConfig,
+    #[serde(default)]
+    pub database: Option<DatabaseConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseConfig {
+    pub enabled: bool,
+    pub db_type: String, // "postgres", "mysql"
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub username: String,
+    pub password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +36,8 @@ pub struct ServerConfig {
     pub enabled: bool,
     #[serde(default = "default_server_url")]
     pub url: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
     #[serde(default = "default_retry_attempts")]
     pub retry_attempts: u32,
     #[serde(default = "default_retry_delay")]
@@ -34,6 +49,7 @@ impl Default for ServerConfig {
         Self {
             enabled: false,
             url: default_server_url(),
+            api_key: None,
             retry_attempts: default_retry_attempts(),
             retry_delay_seconds: default_retry_delay(),
         }
@@ -102,9 +118,11 @@ impl Config {
             server: ServerConfig {
                 enabled: false,
                 url: default_server_url(),
+                api_key: None,
                 retry_attempts: default_retry_attempts(),
                 retry_delay_seconds: default_retry_delay(),
             },
+            database: None,
         }
     }
 }

@@ -1,5 +1,9 @@
+mod alerts;
 mod api;
+mod auth;
 mod config;
+mod db;
+mod middleware;
 mod storage;
 
 use anyhow::Result;
@@ -82,6 +86,25 @@ async fn main() -> Result<()> {
         config.server.port = port;
     }
 
+    // Initialize database if enabled
+    let database = if config.database.enabled {
+        info!("Initializing database at: {}", config.database.url);
+        match db::Database::new(&config.database.url).await {
+            Ok(db) => {
+                info!("Database initialized successfully");
+                Some(Arc::new(db))
+            }
+            Err(e) => {
+                error!("Failed to initialize database: {}", e);
+                error!("Continuing with in-memory storage only");
+                None
+            }
+        }
+    } else {
+        info!("Database disabled, using in-memory storage only");
+        None
+    };
+
     // Initialize storage
     let store = TimeSeriesStore::new(config.storage.max_points_per_metric);
     info!(
@@ -89,22 +112,150 @@ async fn main() -> Result<()> {
         config.storage.max_points_per_metric
     );
 
-    // Create shared application state
-    let state = Arc::new(AppState::new(store));
+    // Initialize alert manager
+    let alert_manager = Arc::new(alerts::manager::AlertManager::new(store.clone()));
+    info!("Initialized alert manager");
 
-    // Build router
+    // Start alert evaluation loop
+    let alert_manager_clone = alert_manager.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+            let triggered = alert_manager_clone.evaluate_alerts().await;
+            if !triggered.is_empty() {
+                info!("Evaluated alerts: {} triggered", triggered.len());
+                // TODO: Send notifications
+            }
+        }
+    });
+
+    // Cleanup old resolved alerts every hour
+    let alert_manager_cleanup = alert_manager.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            alert_manager_cleanup.cleanup_old_alerts(24).await;
+            info!("Cleaned up old resolved alerts");
+        }
+    });
+
+    // Start database cleanup task if database is enabled
+    if let Some(db) = database.clone() {
+        let metrics_retention = config.retention.metrics_hours;
+        let alerts_retention = config.retention.alerts_days;
+        let cleanup_interval = config.retention.cleanup_interval_hours;
+
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(cleanup_interval * 3600));
+            loop {
+                interval.tick().await;
+                info!("Starting database cleanup");
+
+                match db.cleanup_old_metrics(metrics_retention).await {
+                    Ok(count) => info!("Cleaned up {} old metrics", count),
+                    Err(e) => error!("Failed to cleanup metrics: {}", e),
+                }
+
+                match db.cleanup_old_alerts(alerts_retention).await {
+                    Ok(count) => info!("Cleaned up {} old alerts", count),
+                    Err(e) => error!("Failed to cleanup alerts: {}", e),
+                }
+            }
+        });
+        info!(
+            "Started database cleanup task (metrics: {}h, alerts: {}d, interval: {}h)",
+            metrics_retention, alerts_retention, cleanup_interval
+        );
+    }
+
+    // Initialize authentication service if database is enabled
+    let auth_service = if let Some(db) = &database {
+        let service = auth::AuthService::new(db.pool().clone());
+        info!("Initialized authentication service");
+        Some(Arc::new(service))
+    } else {
+        info!("Authentication disabled (database not enabled)");
+        None
+    };
+
+    // Clone auth_service for middleware before moving into AppState
+    let auth_service_for_middleware = auth_service.clone();
+
+    // Create shared application state
+    let state = Arc::new(AppState::new(
+        store,
+        alert_manager,
+        database.clone(),
+        auth_service,
+    ));
+
+    // Build router with protected routes (only POST metrics - for agents sending data)
+    let protected_routes = Router::new().route("/api/v1/metrics", post(api::ingest_metrics));
+
+    // Apply auth middleware only if auth is enabled and required
+    let protected_routes = if config.auth.enabled && config.auth.require_api_key {
+        if let Some(auth_svc) = auth_service_for_middleware {
+            info!("Authentication ENABLED - API keys required for agent metrics submission");
+            protected_routes.layer(axum::middleware::from_fn_with_state(
+                auth_svc,
+                middleware::auth::auth_middleware,
+            ))
+        } else {
+            info!("Authentication DISABLED - no auth service available");
+            protected_routes
+        }
+    } else {
+        info!("Authentication DISABLED - metrics submission is open");
+        protected_routes
+    };
+
     let app = Router::new()
-        // Metrics endpoints
-        .route("/api/v1/metrics", post(api::ingest_metrics))
+        .merge(protected_routes)
+        // Read-only metrics endpoints (unprotected - used by dashboard)
         .route("/api/v1/metrics", get(api::query_metrics))
         .route("/api/v1/metrics/latest", get(api::get_latest_metrics))
-        // Agent endpoints
+        // Agent endpoints (unprotected)
         .route("/api/v1/agents", get(api::list_agents))
         .route("/api/v1/agents/:agent_id", get(api::get_agent))
-        // Stats endpoint
+        // Alert Rule endpoints
+        .route("/api/v1/alert-rules", post(api::create_alert_rule))
+        .route("/api/v1/alert-rules", get(api::list_alert_rules))
+        .route("/api/v1/alert-rules/:rule_id", get(api::get_alert_rule))
+        .route(
+            "/api/v1/alert-rules/:rule_id",
+            axum::routing::put(api::update_alert_rule),
+        )
+        .route(
+            "/api/v1/alert-rules/:rule_id",
+            axum::routing::delete(api::delete_alert_rule),
+        )
+        .route(
+            "/api/v1/alert-rules/:rule_id/toggle",
+            post(api::toggle_alert_rule),
+        )
+        // Alert endpoints
+        .route("/api/v1/alerts", get(api::list_alerts))
+        .route("/api/v1/alerts/:alert_id", get(api::get_alert))
+        .route(
+            "/api/v1/alerts/:alert_id/acknowledge",
+            post(api::acknowledge_alert),
+        )
+        // Stats endpoints
         .route("/api/v1/stats", get(api::get_stats))
+        .route("/api/v1/db/stats", get(api::get_database_stats))
+        // API Key management (no auth required for creating the first key)
+        .route("/api/v1/auth/keys", post(api::create_api_key))
+        .route("/api/v1/auth/keys", get(api::list_api_keys))
+        .route(
+            "/api/v1/auth/keys/:key_id",
+            axum::routing::delete(api::revoke_api_key),
+        )
         // Health check
         .route("/health", get(api::health_check))
+        .route("/api/v1/health", get(api::system_health))
         // Shared state
         .with_state(state)
         // Middleware

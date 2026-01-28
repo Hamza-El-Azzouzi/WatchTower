@@ -1,0 +1,19 @@
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[storage]
+max_points_per_metric = 10000
+
+[retention]
+metrics_hours = 168  # 7 days
+alerts_days = 30
+cleanup_interval_hours = 1
+
+[database]
+enabled = true
+url = "sqlite:/home/helazzou/Desktop/DevOps-Monitoring-System/server/data/monitoring.db"
+
+[auth]
+enabled = true
+require_api_key = true

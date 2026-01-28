@@ -1,0 +1,27 @@
+# Ignore build artifacts
+target/
+**/target/
+
+# Ignore database files
+*.db
+*.db-shm
+*.db-wal
+data/
+
+# Ignore logs
+*.log
+
+# Ignore environment files
+.env
+.env.local
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore OS files
+.DS_Store
+Thumbs.db

@@ -17,6 +17,7 @@ export interface Metric {
 export interface LatestMetrics {
   agent_id: string;
   metrics: Metric[];
+  timestamp?: string;
 }
 
 export interface DataPoint {
@@ -45,4 +46,27 @@ export interface MetricCardProps {
   color?: 'green' | 'yellow' | 'red' | 'blue';
   icon?: React.ReactNode;
   secondaryValue?: string;
+}
+
+export interface Alert {
+  id: string;
+  agent_id: string;
+  rule_id: string;
+  rule_name: string;
+  severity: string;
+  message: string;
+  triggered_at: string;
+  resolved_at?: string;
+  status: 'active' | 'resolved';
+}
+
+export interface AlertsResponse {
+  active_alerts: Alert[];
+  recent_alerts: Alert[];
+  total_active: number;
+}
+
+export interface DatabaseAgent {
+  agent: Agent;
+  metrics: LatestMetrics | null;
 }

@@ -32,3 +32,22 @@ clap = { version = "4.4", features = ["derive"] }
 
 # Utilities
 uuid = { version = "1.6", features = ["v4", "serde"] }
+rand = "0.8"
+base64 = "0.21"
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "sqlite", "chrono", "uuid"] }
+
+[dev-dependencies]
+# Testing utilities
+tokio-test = "0.4"
+axum-test = "14.0"
+tempfile = "3.8"
+mockito = "1.2"
+reqwest = { version = "0.11", features = ["json"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "performance"
+harness = false
+

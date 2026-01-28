@@ -30,5 +30,15 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# JSON serialization
+# Database drivers (optional features)
+tokio-postgres = { version = "0.7", optional = true }
+mysql_async = { version = "0.34", optional = true }
 serde_json = "1.0"
+[features]
+default = []
+postgres = ["tokio-postgres"]
+mysql = ["mysql_async"]
+all-databases = ["postgres", "mysql"]
+
+# JSON serialization
+
