@@ -192,8 +192,10 @@ async fn main() -> Result<()> {
         auth_service,
     ));
 
-    // Build router with protected routes (only POST metrics - for agents sending data)
-    let protected_routes = Router::new().route("/api/v1/metrics", post(api::ingest_metrics));
+    // Build router with protected routes (only POST metrics and logs - for agents sending data)
+    let protected_routes = Router::new()
+        .route("/api/v1/metrics", post(api::ingest_metrics))
+        .route("/api/v1/logs", post(api::ingest_logs));
 
     // Apply auth middleware only if auth is enabled and required
     let protected_routes = if config.auth.enabled && config.auth.require_api_key {
@@ -249,6 +251,8 @@ async fn main() -> Result<()> {
         // Read-only metrics endpoints (unprotected - used by dashboard)
         .route("/api/v1/metrics", get(api::query_metrics))
         .route("/api/v1/metrics/latest", get(api::get_latest_metrics))
+        // Logs query endpoint (unprotected - used by dashboard)
+        .route("/api/v1/logs", get(api::query_logs))
         // Agent endpoints (unprotected)
         .route("/api/v1/agents", get(api::list_agents))
         .route("/api/v1/agents/:agent_id", get(api::get_agent))

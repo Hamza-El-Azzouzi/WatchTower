@@ -30,6 +30,10 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# File system watching
+notify = "6.1"
+regex = "1.10"
+
 # Database drivers (optional features)
 tokio-postgres = { version = "0.7", optional = true }
 mysql_async = { version = "0.34", optional = true }

@@ -12,6 +12,20 @@ pub struct Config {
     pub server: ServerConfig,
     #[serde(default)]
     pub database: Option<DatabaseConfig>,
+    #[serde(default)]
+    pub logs: Option<LogsConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+    #[serde(default = "default_batch_interval")]
+    pub batch_interval_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +108,14 @@ fn default_retry_delay() -> u64 {
     2
 }
 
+fn default_batch_size() -> usize {
+    100
+}
+
+fn default_batch_interval() -> u64 {
+    5
+}
+
 impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let contents = fs::read_to_string(path)?;
@@ -123,6 +145,7 @@ impl Config {
                 retry_delay_seconds: default_retry_delay(),
             },
             database: None,
+            logs: None,
         }
     }
 }

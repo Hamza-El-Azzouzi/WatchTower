@@ -19,10 +19,10 @@ impl TestServer {
     fn start() -> Self {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        
+
         // Use a test port
         let port = 18080;
-        
+
         // Start server as background process
         let process = Command::new("cargo")
             .args(&["run", "--bin", "monitor-server"])
@@ -32,17 +32,17 @@ impl TestServer {
             .env("RUST_LOG", "debug")
             .spawn()
             .expect("Failed to start server");
-        
+
         // Wait for server to be ready
         thread::sleep(Duration::from_secs(2));
-        
+
         Self {
             process,
             port,
             _temp_dir: temp_dir,
         }
     }
-    
+
     fn url(&self, path: &str) -> String {
         format!("http://127.0.0.1:{}{}", self.port, path)
     }
@@ -58,14 +58,14 @@ impl Drop for TestServer {
 #[ignore] // Requires server binary to be built - run manually
 async fn test_health_check() {
     let server = TestServer::start();
-    
+
     let client = reqwest::Client::new();
     let response = client
         .get(&server.url("/health"))
         .send()
         .await
         .expect("Failed to send request");
-    
+
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.unwrap();
     assert_eq!(body["status"], "healthy");
@@ -75,7 +75,7 @@ async fn test_health_check() {
 #[ignore] // Requires server binary to be built - run manually
 async fn test_metrics_ingestion() {
     let server = TestServer::start();
-    
+
     let client = reqwest::Client::new();
     let metric = json!({
         "agent_id": "test-agent",
@@ -85,14 +85,14 @@ async fn test_metrics_ingestion() {
             "memory_usage": 60.0
         }
     });
-    
+
     let response = client
         .post(&server.url("/api/metrics"))
         .json(&metric)
         .send()
         .await
         .expect("Failed to send request");
-    
+
     assert_eq!(response.status(), 200);
 }
 

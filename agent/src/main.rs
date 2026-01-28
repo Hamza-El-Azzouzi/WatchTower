@@ -9,7 +9,7 @@ use clap::Parser;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use collector::{
     cpu::CpuCollector, disk::DiskCollector, memory::MemoryCollector, network::NetworkCollector,
@@ -129,6 +129,31 @@ async fn run_agent(config: Config) -> Result<()> {
         None
     };
 
+    // Initialize log collector if enabled
+    let mut log_collector = if let Some(ref logs_config) = config.logs {
+        if logs_config.enabled && !logs_config.paths.is_empty() {
+            info!(
+                "Log collection enabled - watching {} files",
+                logs_config.paths.len()
+            );
+            match collector::LogCollector::new(
+                config.agent.name.clone(),
+                logs_config.paths.clone(),
+                logs_config.batch_size,
+            ) {
+                Ok(collector) => Some(collector),
+                Err(e) => {
+                    warn!("Failed to initialize log collector: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Initialize metrics sender if server is enabled
     let sender = if config.server.enabled {
         info!(
@@ -227,6 +252,30 @@ async fn run_agent(config: Config) -> Result<()> {
             if let Err(e) = sender.send_metrics(&payload).await {
                 warn!("Failed to send metrics to server: {}", e);
                 // Continue despite send failure - we still display metrics locally
+            }
+        }
+
+        // Process log file events and send logs if collector is enabled
+        if let Some(ref mut log_collector) = log_collector {
+            // Process file system events
+            if let Err(e) = log_collector.process_events() {
+                warn!("Error processing log events: {}", e);
+            }
+
+            // Check if we should flush logs (batch size reached or time-based)
+            if log_collector.should_flush() {
+                if let Some(logs_payload) = log_collector.create_payload() {
+                    let log_count = logs_payload.logs.len();
+
+                    if let Some(ref sender) = sender {
+                        // Send logs to server
+                        if let Err(e) = sender.send_logs(&logs_payload).await {
+                            warn!("Failed to send {} logs to server: {}", log_count, e);
+                        } else {
+                            debug!("Sent {} logs to server", log_count);
+                        }
+                    }
+                }
             }
         }
     }

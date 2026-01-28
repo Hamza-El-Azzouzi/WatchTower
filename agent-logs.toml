@@ -1,0 +1,27 @@
+[agent]
+name = "test-agent-01"
+
+[collection]
+interval_seconds = 10
+
+[metrics]
+collect_cpu = true
+collect_memory = true
+collect_disk = true
+collect_network = true
+
+[server]
+enabled = true
+url = "http://localhost:8080"
+retry_attempts = 3
+retry_delay_seconds = 2
+
+# Log collection configuration
+[logs]
+enabled = true
+paths = [
+    "/tmp/test.log",      # Test log file
+    "/var/log/syslog",    # System logs (if available)
+]
+batch_size = 100          # Send logs when 100 entries are collected
+batch_interval_seconds = 5 # Or send every 5 seconds

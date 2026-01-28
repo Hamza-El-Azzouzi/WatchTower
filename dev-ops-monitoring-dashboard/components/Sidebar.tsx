@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { Activity, Home, Database, Zap, Settings, Bell, HelpCircle, Shield, Key, LogOut, Users, Lock } from 'lucide-react'
+import { Activity, Home, Database, Zap, Settings, Bell, HelpCircle, Shield, Key, LogOut, Users, Lock, FileText } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getAlerts } from '@/lib/alerts-api'
 
@@ -43,6 +43,7 @@ export function Sidebar() {
     { icon: Home, label: 'Overview', href: '/', id: 'overview' },
     { icon: Activity, label: 'Servers', href: '/', id: 'servers' },
     { icon: Database, label: 'Databases', href: '/databases', id: 'databases' },
+    { icon: FileText, label: 'Logs', href: '/logs', id: 'logs' },
     { icon: Zap, label: 'Performance', href: '/performance', id: 'performance' },
     { icon: Bell, label: 'Alerts', href: '/alerts', id: 'alerts', badge: alertCount },
   ]

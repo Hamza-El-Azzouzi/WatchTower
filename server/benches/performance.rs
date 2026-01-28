@@ -33,11 +33,9 @@ fn benchmark_json_parsing(c: &mut Criterion) {
             "network_out": 2048.0
         }
     }"#;
-    
+
     c.bench_function("json_parse_metrics", |b| {
-        b.iter(|| {
-            serde_json::from_str::<serde_json::Value>(black_box(json_data)).unwrap()
-        });
+        b.iter(|| serde_json::from_str::<serde_json::Value>(black_box(json_data)).unwrap());
     });
 }
 
@@ -53,28 +51,22 @@ fn benchmark_json_serialization(c: &mut Criterion) {
             "network_out": 2048.0
         }
     });
-    
+
     c.bench_function("json_serialize_metrics", |b| {
-        b.iter(|| {
-            serde_json::to_string(&data).unwrap()
-        });
+        b.iter(|| serde_json::to_string(&data).unwrap());
     });
 }
 
 // String operations (relevant to key generation and validation)
 fn benchmark_string_operations(c: &mut Criterion) {
     let text = "msk_1234567890abcdefghijklmnopqrstuvwxyz1234567890";
-    
+
     c.bench_function("string_starts_with", |b| {
-        b.iter(|| {
-            black_box(text).starts_with("msk_")
-        });
+        b.iter(|| black_box(text).starts_with("msk_"));
     });
-    
+
     c.bench_function("string_length", |b| {
-        b.iter(|| {
-            black_box(text).len()
-        });
+        b.iter(|| black_box(text).len());
     });
 }
 
@@ -89,7 +81,7 @@ fn benchmark_vector_operations(c: &mut Criterion) {
             vec
         });
     });
-    
+
     c.bench_function("vec_with_capacity_1000", |b| {
         b.iter(|| {
             let mut vec = Vec::with_capacity(1000);
@@ -106,7 +98,7 @@ criterion_group! {
     config = Criterion::default()
         .measurement_time(Duration::from_secs(10))
         .sample_size(100);
-    targets = 
+    targets =
         benchmark_fibonacci,
         benchmark_json_parsing,
         benchmark_json_serialization,

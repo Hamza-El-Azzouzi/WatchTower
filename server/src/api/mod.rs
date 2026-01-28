@@ -277,6 +277,96 @@ pub async fn health_check() -> impl IntoResponse {
     }))
 }
 
+// ============ Logs API Endpoints ============
+
+/// POST /api/v1/logs - Ingest logs from agents
+pub async fn ingest_logs(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<crate::storage::LogsPayload>,
+) -> Result<impl IntoResponse, ApiError> {
+    info!(
+        "Received {} logs from agent '{}'",
+        payload.logs.len(),
+        payload.agent_id
+    );
+
+    state.store.insert_logs(payload);
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "status": "accepted"
+        })),
+    ))
+}
+
+/// Query parameters for GET /api/v1/logs
+#[derive(Debug, Deserialize)]
+pub struct LogsQuery {
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub from: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub to: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub keyword: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Response for logs query
+#[derive(Debug, Serialize)]
+pub struct LogsResponse {
+    pub logs: Vec<crate::storage::LogEntry>,
+    pub count: usize,
+    pub total_count: usize,
+}
+
+/// GET /api/v1/logs - Query logs
+pub async fn query_logs(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<LogsQuery>,
+) -> Result<Json<LogsResponse>, ApiError> {
+    info!(
+        "Querying logs - agent: {:?}, level: {:?}, keyword: {:?}",
+        params.agent_id, params.level, params.keyword
+    );
+
+    // Parse log level if provided
+    let level = params
+        .level
+        .as_ref()
+        .and_then(|l| match l.to_uppercase().as_str() {
+            "DEBUG" => Some(crate::storage::LogLevel::DEBUG),
+            "INFO" => Some(crate::storage::LogLevel::INFO),
+            "WARN" => Some(crate::storage::LogLevel::WARN),
+            "ERROR" => Some(crate::storage::LogLevel::ERROR),
+            "FATAL" => Some(crate::storage::LogLevel::FATAL),
+            _ => None,
+        });
+
+    let logs = state.store.query_logs(
+        params.agent_id.as_deref(),
+        level,
+        params.from,
+        params.to,
+        params.keyword.as_deref(),
+        params.limit,
+    );
+
+    let count = logs.len();
+    let total_count = state.store.get_log_count();
+
+    Ok(Json(LogsResponse {
+        logs,
+        count,
+        total_count,
+    }))
+}
+
 // ============ Alert API Endpoints ============
 
 /// POST /api/v1/alert-rules - Create a new alert rule

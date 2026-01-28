@@ -1,9 +1,12 @@
 pub mod cpu;
 pub mod disk;
+pub mod logs;
 pub mod memory;
 pub mod network;
 
 use serde::{Deserialize, Serialize};
+
+pub use logs::{LogCollector, LogEntryInput, LogLevel, LogsPayload};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemMetrics {
