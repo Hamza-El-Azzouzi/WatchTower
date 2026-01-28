@@ -9,3 +9,8 @@ collect_cpu = true
 collect_memory = true
 collect_disk = true
 collect_network = true
+[server]
+enabled = true
+url = "http://localhost:8080"
+retry_attempts = 3
+retry_delay_seconds = 2

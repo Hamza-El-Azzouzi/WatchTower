@@ -1,0 +1,99 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import PageHeader from '@/components/PageHeader';
+import HeroBanner from '@/components/HeroBanner';
+import StatsCards from '@/components/StatsCards';
+import ServerCard from '@/components/ServerCard';
+import { getAgents } from '@/lib/api';
+import { Agent } from '@/types';
+import { AlertCircle, Loader } from 'lucide-react';
+
+export default function OverviewPage() {
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState(new Date());
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const fetchAgents = async () => {
+    try {
+      setIsRefreshing(true);
+      const data = await getAgents();
+      setAgents(data);
+      setLastUpdated(new Date());
+      setError(null);
+    } catch {
+      setError('Failed to load servers. Make sure the API is running at http://localhost:8080');
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAgents();
+
+    // Poll every 10 seconds
+    const interval = setInterval(fetchAgents, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-background">
+      <PageHeader />
+
+      <main className="max-w-7xl mx-auto px-8 py-8">
+        <HeroBanner />
+        
+        {error && (
+          <div className="mb-8 glass-morphism rounded-xl border border-red-500/30 bg-red-500/10 p-4 flex items-start gap-3 animate-slide-up">
+            <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <h3 className="font-semibold text-red-300 mb-1">Connection Error</h3>
+              <p className="text-sm text-red-200">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-12">
+            <Loader className="w-8 h-8 text-blue-400 animate-spin mb-4" />
+            <p className="text-muted-foreground">Loading servers...</p>
+          </div>
+        ) : (
+          <>
+            <StatsCards agents={agents} lastUpdated={lastUpdated} />
+
+            {agents.length === 0 ? (
+              <div className="glass-morphism rounded-xl border border-border p-12 text-center animate-slide-up">
+                <p className="text-muted-foreground mb-2">No servers found</p>
+                <p className="text-sm text-muted-foreground">Make sure the API is running and has agents registered.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {agents.map(agent => (
+                  <ServerCard key={agent.id} agent={agent} />
+                ))}
+              </div>
+            )}
+
+            <div className="mt-12 pt-8 border-t border-border flex items-center justify-between">
+              <div className="text-xs text-muted-foreground flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse-soft" />
+                Last updated: {lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  <div className="text-xs text-muted-foreground">Monitoring Status</div>
+                  <div className="text-sm font-medium text-emerald-400">All Systems Normal</div>
+                </div>
+                {isRefreshing && <Loader className="w-4 h-4 text-accent animate-spin" />}
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+    </div>
+  );
+}

@@ -1,5 +1,6 @@
 mod collector;
 mod config;
+mod sender;
 
 use anyhow::Result;
 use chrono::Local;
@@ -7,13 +8,14 @@ use clap::Parser;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use collector::{
     cpu::CpuCollector, disk::DiskCollector, memory::MemoryCollector, network::NetworkCollector,
     SystemMetrics,
 };
 use config::Config;
+use sender::{MetricsPayload, MetricsSender};
 
 #[derive(Parser, Debug)]
 #[command(name = "monitor-agent")]
@@ -104,15 +106,38 @@ async fn run_agent(config: Config) -> Result<()> {
         config.metrics.collect_network
     );
 
+    // Initialize metrics sender if server is enabled
+    let sender = if config.server.enabled {
+        info!(
+            "Server integration enabled - sending metrics to {}",
+            config.server.url
+        );
+        Some(MetricsSender::new(
+            config.server.url.clone(),
+            config.server.retry_attempts,
+            config.server.retry_delay_seconds,
+        )?)
+    } else {
+        info!("Server integration disabled - metrics will only be displayed locally");
+        None
+    };
+
     let mut collectors = MetricCollectors::new();
     let interval = Duration::from_secs(config.collection.interval_seconds);
     let mut interval_timer = time::interval(interval);
 
     println!("\n{:-^80}", " Monitoring Agent Started ");
     println!(
-        "Agent: {} | Interval: {}s\n",
-        config.agent.name, config.collection.interval_seconds
+        "Agent: {} | Interval: {}s | Server: {}",
+        config.agent.name,
+        config.collection.interval_seconds,
+        if config.server.enabled {
+            &config.server.url
+        } else {
+            "Disabled"
+        }
     );
+    println!();
 
     loop {
         interval_timer.tick().await;
@@ -120,8 +145,36 @@ async fn run_agent(config: Config) -> Result<()> {
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
         let metrics = collectors.collect(&config);
 
+        // Display metrics locally
         print!("[{}] ", timestamp);
         metrics.display();
+
+        // Send metrics to server if enabled
+        if let Some(ref sender) = sender {
+            let mut metrics_map = std::collections::HashMap::new();
+            metrics_map.insert("cpu_usage".to_string(), metrics.cpu_percent as f64);
+            metrics_map.insert("memory_usage".to_string(), metrics.memory_percent as f64);
+            metrics_map.insert("disk_usage".to_string(), metrics.disk_percent as f64);
+            metrics_map.insert(
+                "network_rx_bytes".to_string(),
+                metrics.network_rx_bytes as f64,
+            );
+            metrics_map.insert(
+                "network_tx_bytes".to_string(),
+                metrics.network_tx_bytes as f64,
+            );
+
+            let payload = MetricsPayload {
+                agent_id: config.agent.name.clone(),
+                timestamp: chrono::Utc::now(),
+                metrics: metrics_map,
+            };
+
+            if let Err(e) = sender.send_metrics(&payload).await {
+                warn!("Failed to send metrics to server: {}", e);
+                // Continue despite send failure - we still display metrics locally
+            }
+        }
     }
 }
 

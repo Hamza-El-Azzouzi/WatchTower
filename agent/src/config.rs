@@ -8,11 +8,36 @@ pub struct Config {
     pub agent: AgentConfig,
     pub collection: CollectionConfig,
     pub metrics: MetricsConfig,
+    #[serde(default)]
+    pub server: ServerConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_server_url")]
+    pub url: String,
+    #[serde(default = "default_retry_attempts")]
+    pub retry_attempts: u32,
+    #[serde(default = "default_retry_delay")]
+    pub retry_delay_seconds: u64,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: default_server_url(),
+            retry_attempts: default_retry_attempts(),
+            retry_delay_seconds: default_retry_delay(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +66,18 @@ fn default_true() -> bool {
     true
 }
 
+fn default_server_url() -> String {
+    "http://localhost:8080".to_string()
+}
+
+fn default_retry_attempts() -> u32 {
+    3
+}
+
+fn default_retry_delay() -> u64 {
+    2
+}
+
 impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let contents = fs::read_to_string(path)?;
@@ -61,6 +98,12 @@ impl Config {
                 collect_memory: true,
                 collect_disk: true,
                 collect_network: true,
+            },
+            server: ServerConfig {
+                enabled: false,
+                url: default_server_url(),
+                retry_attempts: default_retry_attempts(),
+                retry_delay_seconds: default_retry_delay(),
             },
         }
     }
