@@ -1,3 +1,4 @@
+mod aggregation;
 mod alerts;
 mod api;
 mod auth;
@@ -5,6 +6,7 @@ mod config;
 mod db;
 mod middleware;
 mod storage;
+mod websocket;
 
 use anyhow::Result;
 use axum::{
@@ -116,16 +118,32 @@ async fn main() -> Result<()> {
     let alert_manager = Arc::new(alerts::manager::AlertManager::new(store.clone()));
     info!("Initialized alert manager");
 
+    // Initialize WebSocket manager
+    let ws_manager = Arc::new(websocket::WebSocketManager::new());
+    info!("Initialized WebSocket manager");
+
     // Start alert evaluation loop
     let alert_manager_clone = alert_manager.clone();
+    let alert_check_interval = config.alerts.check_interval_seconds;
+    let ws_manager_clone = ws_manager.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+        let mut interval =
+            tokio::time::interval(tokio::time::Duration::from_secs(alert_check_interval));
         loop {
             interval.tick().await;
             let triggered = alert_manager_clone.evaluate_alerts().await;
             if !triggered.is_empty() {
                 info!("Evaluated alerts: {} triggered", triggered.len());
-                // TODO: Send notifications
+                // Broadcast alerts via WebSocket
+                for alert in &triggered {
+                    ws_manager_clone.broadcast_alert(websocket::WsMessage::Alert {
+                        alert_id: alert.id.to_string(),
+                        agent_id: alert.agent_id.clone(),
+                        severity: format!("{:?}", alert.severity),
+                        message: alert.message.clone(),
+                        state: format!("{:?}", alert.state),
+                    });
+                }
             }
         }
     });
@@ -141,34 +159,20 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Start database cleanup task if database is enabled
+    // Start background jobs if database is enabled
     if let Some(db) = database.clone() {
-        let metrics_retention = config.retention.metrics_hours;
-        let alerts_retention = config.retention.alerts_days;
-        let cleanup_interval = config.retention.cleanup_interval_hours;
-
-        tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(tokio::time::Duration::from_secs(cleanup_interval * 3600));
-            loop {
-                interval.tick().await;
-                info!("Starting database cleanup");
-
-                match db.cleanup_old_metrics(metrics_retention).await {
-                    Ok(count) => info!("Cleaned up {} old metrics", count),
-                    Err(e) => error!("Failed to cleanup metrics: {}", e),
-                }
-
-                match db.cleanup_old_alerts(alerts_retention).await {
-                    Ok(count) => info!("Cleaned up {} old alerts", count),
-                    Err(e) => error!("Failed to cleanup alerts: {}", e),
-                }
-            }
-        });
-        info!(
-            "Started database cleanup task (metrics: {}h, alerts: {}d, interval: {}h)",
-            metrics_retention, alerts_retention, cleanup_interval
+        // Start aggregation and cleanup jobs
+        aggregation::start_background_jobs(
+            db,
+            config.aggregation.minute_interval_hours,
+            config.aggregation.hour_interval_hours,
+            config.retention.cleanup_interval_hours,
+            config.retention.raw_metrics_hours,
+            config.retention.minute_aggregates_days,
+            config.retention.hour_aggregates_days,
+            config.retention.alerts_days,
         );
+        info!("Started all background aggregation and cleanup jobs");
     }
 
     // Initialize authentication service if database is enabled
@@ -190,6 +194,7 @@ async fn main() -> Result<()> {
         alert_manager,
         database.clone(),
         auth_service,
+        ws_manager.clone(),
     ));
 
     // Build router with protected routes (only POST metrics and logs - for agents sending data)
@@ -256,6 +261,10 @@ async fn main() -> Result<()> {
         // Agent endpoints (unprotected)
         .route("/api/v1/agents", get(api::list_agents))
         .route("/api/v1/agents/:agent_id", get(api::get_agent))
+        // WebSocket endpoints (real-time updates)
+        .route("/api/v1/ws/metrics", get(websocket::ws_metrics_handler))
+        .route("/api/v1/ws/logs", get(websocket::ws_logs_handler))
+        .route("/api/v1/ws/alerts", get(websocket::ws_alerts_handler))
         // Alert Rule endpoints
         .route("/api/v1/alert-rules", post(api::create_alert_rule))
         .route("/api/v1/alert-rules", get(api::list_alert_rules))

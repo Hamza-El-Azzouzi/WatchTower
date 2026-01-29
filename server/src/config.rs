@@ -12,6 +12,12 @@ pub struct Config {
     #[serde(default)]
     pub retention: RetentionConfig,
     #[serde(default)]
+    pub aggregation: AggregationConfig,
+    #[serde(default)]
+    pub alerts: AlertsConfig,
+    #[serde(default)]
+    pub websocket: WebSocketConfig,
+    #[serde(default)]
     pub auth: AuthConfig,
 }
 
@@ -40,14 +46,44 @@ pub struct DatabaseConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RetentionConfig {
-    #[serde(default = "default_metrics_retention_hours")]
-    pub metrics_hours: i64,
+    #[serde(default = "default_raw_metrics_hours")]
+    pub raw_metrics_hours: i64,
+
+    #[serde(default = "default_minute_aggregates_days")]
+    pub minute_aggregates_days: i64,
+
+    #[serde(default = "default_hour_aggregates_days")]
+    pub hour_aggregates_days: i64,
 
     #[serde(default = "default_alerts_retention_days")]
     pub alerts_days: i64,
 
     #[serde(default = "default_cleanup_interval_hours")]
     pub cleanup_interval_hours: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregationConfig {
+    #[serde(default = "default_minute_interval_hours")]
+    pub minute_interval_hours: u64,
+
+    #[serde(default = "default_hour_interval_hours")]
+    pub hour_interval_hours: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertsConfig {
+    #[serde(default = "default_check_interval_seconds")]
+    pub check_interval_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSocketConfig {
+    #[serde(default = "default_max_connections")]
+    pub max_connections: usize,
+
+    #[serde(default = "default_heartbeat_interval")]
+    pub heartbeat_interval: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,8 +119,16 @@ fn default_false() -> bool {
     false
 }
 
-fn default_metrics_retention_hours() -> i64 {
-    720 // 30 days
+fn default_raw_metrics_hours() -> i64 {
+    24 // 1 day
+}
+
+fn default_minute_aggregates_days() -> i64 {
+    7 // 1 week
+}
+
+fn default_hour_aggregates_days() -> i64 {
+    30 // 1 month
 }
 
 fn default_alerts_retention_days() -> i64 {
@@ -92,7 +136,27 @@ fn default_alerts_retention_days() -> i64 {
 }
 
 fn default_cleanup_interval_hours() -> u64 {
-    24 // Once per day
+    1 // Every hour
+}
+
+fn default_minute_interval_hours() -> u64 {
+    1 // Aggregate to minutes every hour
+}
+
+fn default_hour_interval_hours() -> u64 {
+    24 // Aggregate to hours daily
+}
+
+fn default_check_interval_seconds() -> u64 {
+    30 // Check alerts every 30 seconds
+}
+
+fn default_max_connections() -> usize {
+    1000
+}
+
+fn default_heartbeat_interval() -> u64 {
+    30 // 30 seconds
 }
 
 impl Default for DatabaseConfig {
@@ -107,9 +171,37 @@ impl Default for DatabaseConfig {
 impl Default for RetentionConfig {
     fn default() -> Self {
         Self {
-            metrics_hours: default_metrics_retention_hours(),
+            raw_metrics_hours: default_raw_metrics_hours(),
+            minute_aggregates_days: default_minute_aggregates_days(),
+            hour_aggregates_days: default_hour_aggregates_days(),
             alerts_days: default_alerts_retention_days(),
             cleanup_interval_hours: default_cleanup_interval_hours(),
+        }
+    }
+}
+
+impl Default for AggregationConfig {
+    fn default() -> Self {
+        Self {
+            minute_interval_hours: default_minute_interval_hours(),
+            hour_interval_hours: default_hour_interval_hours(),
+        }
+    }
+}
+
+impl Default for AlertsConfig {
+    fn default() -> Self {
+        Self {
+            check_interval_seconds: default_check_interval_seconds(),
+        }
+    }
+}
+
+impl Default for WebSocketConfig {
+    fn default() -> Self {
+        Self {
+            max_connections: default_max_connections(),
+            heartbeat_interval: default_heartbeat_interval(),
         }
     }
 }
@@ -163,9 +255,19 @@ impl Config {
         }
 
         // Retention config
-        if let Ok(hours) = std::env::var("RETENTION_METRICS_HOURS") {
+        if let Ok(hours) = std::env::var("RETENTION_RAW_METRICS_HOURS") {
             if let Ok(h) = hours.parse() {
-                self.retention.metrics_hours = h;
+                self.retention.raw_metrics_hours = h;
+            }
+        }
+        if let Ok(days) = std::env::var("RETENTION_MINUTE_AGGREGATES_DAYS") {
+            if let Ok(d) = days.parse() {
+                self.retention.minute_aggregates_days = d;
+            }
+        }
+        if let Ok(days) = std::env::var("RETENTION_HOUR_AGGREGATES_DAYS") {
+            if let Ok(d) = days.parse() {
+                self.retention.hour_aggregates_days = d;
             }
         }
         if let Ok(days) = std::env::var("RETENTION_ALERTS_DAYS") {
@@ -198,6 +300,9 @@ impl Config {
             },
             database: DatabaseConfig::default(),
             retention: RetentionConfig::default(),
+            aggregation: AggregationConfig::default(),
+            alerts: AlertsConfig::default(),
+            websocket: WebSocketConfig::default(),
             auth: AuthConfig::default(),
         };
 

@@ -58,8 +58,8 @@ export default function ServerDetailPage() {
     if (agentId) {
       fetchData();
 
-      // Poll every 10 seconds
-      const interval = setInterval(fetchData, 10000);
+      // Poll every 1 second for real-time updates
+      const interval = setInterval(fetchData, 1000);
       return () => clearInterval(interval);
     }
   }, [agentId]);

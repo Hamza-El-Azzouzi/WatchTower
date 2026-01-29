@@ -1,6 +1,27 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: monitoring-postgres
+    environment:
+      POSTGRES_DB: monitoring
+      POSTGRES_USER: monitoring_user
+      POSTGRES_PASSWORD: monitoring_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitoring_user -d monitoring"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - monitoring
+    restart: unless-stopped
+
   # Monitoring Server
   monitor-server:
     build:
@@ -10,24 +31,25 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - monitor-data:/app/data
       - ./server/config.toml:/app/config.toml:ro
     environment:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8080
-      - DATABASE_ENABLED=true
-      - DATABASE_URL=sqlite:/app/data/monitoring.db
+      - DATABASE_URL=postgresql://monitoring_user:monitoring_password@postgres:5432/monitoring
       - AUTH_ENABLED=true
-      - AUTH_REQUIRE_API_KEY=false
+      - RUST_LOG=info
     networks:
       - monitoring
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
       interval: 30s
       timeout: 3s
       retries: 3
-      start_period: 5s
+      start_period: 10s
 
   # Dashboard (Next.js)
   monitor-dashboard:
@@ -39,6 +61,7 @@ services:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8080
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8080
     networks:
       - monitoring
     depends_on:
@@ -52,7 +75,7 @@ services:
     environment:
       - AGENT_NAME=docker-web-01
       - SERVER_URL=http://monitor-server:8080
-      - COLLECTION_INTERVAL=10
+      - COLLECTION_INTERVAL=15
       # Uncomment and set your API key if authentication is required
       # - API_KEY=msk_your_api_key_here
     networks:
@@ -68,7 +91,7 @@ services:
     environment:
       - AGENT_NAME=docker-api-01
       - SERVER_URL=http://monitor-server:8080
-      - COLLECTION_INTERVAL=10
+      - COLLECTION_INTERVAL=15
       # Uncomment and set your API key if authentication is required
       # - API_KEY=msk_your_api_key_here
     networks:
@@ -84,7 +107,7 @@ services:
     environment:
       - AGENT_NAME=docker-db-01
       - SERVER_URL=http://monitor-server:8080
-      - COLLECTION_INTERVAL=10
+      - COLLECTION_INTERVAL=15
       # Uncomment and set your API key if authentication is required
       # - API_KEY=msk_your_api_key_here
     networks:
@@ -98,5 +121,6 @@ networks:
     driver: bridge
 
 volumes:
-  monitor-data:
+  postgres_data:
     driver: local
+

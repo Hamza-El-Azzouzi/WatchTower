@@ -13,6 +13,7 @@ use crate::alerts::manager::AlertManager;
 use crate::auth::{AdminLoginRequest, AdminLoginResponse, AuthService, CreateApiKeyRequest};
 use crate::db::Database;
 use crate::storage::{Agent, DataPoint, MetricsPayload, StorageStats, TimeSeriesStore};
+use crate::websocket::{WebSocketManager, WsMessage};
 
 /// Shared application state
 #[derive(Clone)]
@@ -21,6 +22,7 @@ pub struct AppState {
     pub alert_manager: Arc<AlertManager>,
     pub database: Option<Arc<Database>>,
     pub auth_service: Option<Arc<AuthService>>,
+    pub ws_manager: Arc<WebSocketManager>,
 }
 
 impl AppState {
@@ -29,12 +31,14 @@ impl AppState {
         alert_manager: Arc<AlertManager>,
         database: Option<Arc<Database>>,
         auth_service: Option<Arc<AuthService>>,
+        ws_manager: Arc<WebSocketManager>,
     ) -> Self {
         Self {
             store,
             alert_manager,
             database,
             auth_service,
+            ws_manager,
         }
     }
 }
@@ -64,6 +68,7 @@ impl IntoResponse for ApiError {
 /// POST /api/v1/metrics - Ingest metrics from agents
 pub async fn ingest_metrics(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<MetricsPayload>,
 ) -> Result<impl IntoResponse, ApiError> {
     info!(
@@ -72,7 +77,83 @@ pub async fn ingest_metrics(
         payload.metrics.len()
     );
 
-    state.store.insert_metrics(payload);
+    // Check agent limit if auth is enabled and get api_key_id for registration
+    let mut api_key_id: Option<i64> = None;
+    if let Some(auth_service) = &state.auth_service {
+        // Extract API key from headers
+        let api_key = headers
+            .get("X-API-Key")
+            .or_else(|| headers.get("Authorization"))
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)));
+
+        if let Some(key) = api_key {
+            // Validate with agent limit check
+            match auth_service
+                .validate_api_key_with_agent(key, Some(&payload.agent_id))
+                .await
+            {
+                Ok(Some(key_id)) => {
+                    // Valid and within limits, store key_id for agent registration
+                    api_key_id = Some(key_id);
+                }
+                Ok(None) => {
+                    return Err(ApiError::BadRequest(
+                        "API key is invalid, expired, revoked, or agent limit reached".to_string(),
+                    ));
+                }
+                Err(e) => {
+                    error!("API key validation error: {}", e);
+                    return Err(ApiError::InternalError("Authentication error".to_string()));
+                }
+            }
+        }
+    }
+
+    // Store metrics in-memory for fast queries
+    state.store.insert_metrics(payload.clone());
+
+    // Persist to database if available
+    if let Some(db) = &state.database {
+        let metrics: Vec<(String, f64)> = payload
+            .metrics
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+
+        // Register/update agent in database
+        if let Err(e) = db
+            .register_agent(
+                &payload.agent_id,
+                api_key_id,
+                None, // hostname could be extracted from agent metadata
+                None, // os
+                None, // arch
+            )
+            .await
+        {
+            error!("Failed to register agent in database: {}", e);
+        }
+
+        // Insert metrics
+        if let Err(e) = db
+            .insert_metrics(&payload.agent_id, &metrics, payload.timestamp)
+            .await
+        {
+            error!("Failed to persist metrics to database: {}", e);
+            // Continue anyway - metrics are still in memory
+        }
+    }
+
+    // Broadcast each metric via WebSocket
+    for (metric_name, value) in &payload.metrics {
+        state.ws_manager.broadcast_metric(WsMessage::Metric {
+            agent_id: payload.agent_id.clone(),
+            metric_name: metric_name.clone(),
+            value: *value,
+            timestamp: payload.timestamp,
+        });
+    }
 
     Ok((
         StatusCode::ACCEPTED,
@@ -202,12 +283,22 @@ pub async fn list_agents(
     // If no auth service or no API key, return all agents (backward compatibility)
     let filtered_agents = if let (Some(auth_service), Some(key)) = (&state.auth_service, api_key) {
         match auth_service.validate_api_key(key).await {
-            Ok(Some(api_key_data)) => {
-                // Filter agents to only those used by this API key
-                all_agents
-                    .into_iter()
-                    .filter(|agent| api_key_data.used_by_agents.contains(&agent.id))
-                    .collect()
+            Ok(Some(api_key_id)) => {
+                // Filter agents to only those registered with this API key
+                if let Some(db) = &state.database {
+                    match db.get_agents_by_api_key(api_key_id).await {
+                        Ok(agent_ids) => all_agents
+                            .into_iter()
+                            .filter(|agent| agent_ids.contains(&agent.id))
+                            .collect(),
+                        Err(e) => {
+                            error!("Failed to get agents by API key: {}", e);
+                            all_agents
+                        }
+                    }
+                } else {
+                    all_agents
+                }
             }
             _ => all_agents, // If validation fails, return all for backward compatibility
         }
@@ -255,14 +346,18 @@ pub async fn get_stats(
 
     // Filter agent count if API key is provided
     if let (Some(auth_service), Some(key)) = (&state.auth_service, api_key) {
-        if let Ok(Some(api_key_data)) = auth_service.validate_api_key(key).await {
+        if let Ok(Some(api_key_id)) = auth_service.validate_api_key(key).await {
             // Update agent count to only include agents for this API key
-            let all_agents = state.store.get_agents();
-            let filtered_count = all_agents
-                .iter()
-                .filter(|agent| api_key_data.used_by_agents.contains(&agent.id))
-                .count();
-            stats.total_agents = filtered_count;
+            if let Some(db) = &state.database {
+                if let Ok(agent_ids) = db.get_agents_by_api_key(api_key_id).await {
+                    let all_agents = state.store.get_agents();
+                    let filtered_count = all_agents
+                        .iter()
+                        .filter(|agent| agent_ids.contains(&agent.id))
+                        .count();
+                    stats.total_agents = filtered_count;
+                }
+            }
         }
     }
 
@@ -290,7 +385,27 @@ pub async fn ingest_logs(
         payload.agent_id
     );
 
-    state.store.insert_logs(payload);
+    // Store logs in-memory for fast queries
+    state.store.insert_logs(payload.clone());
+
+    // Persist to database if available
+    if let Some(db) = &state.database {
+        for log in &payload.logs {
+            if let Err(e) = db
+                .insert_log(
+                    &payload.agent_id,
+                    &log.level.to_string(),
+                    &log.source,
+                    &log.message,
+                    log.timestamp,
+                )
+                .await
+            {
+                error!("Failed to persist log to database: {}", e);
+                // Continue anyway - logs are still in memory
+            }
+        }
+    }
 
     Ok((
         StatusCode::ACCEPTED,
@@ -462,12 +577,20 @@ pub async fn list_alerts(
 
     // Filter alerts by API key if provided
     let filtered_alerts = if let (Some(auth_service), Some(key)) = (&state.auth_service, api_key) {
-        if let Ok(Some(api_key_data)) = auth_service.validate_api_key(key).await {
+        if let Ok(Some(api_key_id)) = auth_service.validate_api_key(key).await {
             // Only include alerts for agents associated with this API key
-            all_alerts
-                .into_iter()
-                .filter(|alert| api_key_data.used_by_agents.contains(&alert.agent_id))
-                .collect()
+            if let Some(db) = &state.database {
+                if let Ok(agent_ids) = db.get_agents_by_api_key(api_key_id).await {
+                    all_alerts
+                        .into_iter()
+                        .filter(|alert| agent_ids.contains(&alert.agent_id))
+                        .collect()
+                } else {
+                    all_alerts
+                }
+            } else {
+                all_alerts
+            }
         } else {
             all_alerts
         }
@@ -585,7 +708,7 @@ pub async fn create_api_key(
         .as_ref()
         .ok_or_else(|| ApiError::BadRequest("Authentication is not enabled".to_string()))?;
 
-    match auth_service.create_api_key(request, "admin").await {
+    match auth_service.create_api_key(request).await {
         Ok(response) => {
             info!("Created new API key: {}", response.name);
             Ok(Json(response))
@@ -749,16 +872,13 @@ pub async fn admin_change_password(
         )
         .await
     {
-        Ok(true) => {
+        Ok(()) => {
             info!("Admin '{}' changed password successfully", request.username);
             Ok(Json(serde_json::json!({
                 "success": true,
                 "message": "Password changed successfully"
             })))
         }
-        Ok(false) => Err(ApiError::BadRequest(
-            "Invalid username or password".to_string(),
-        )),
         Err(e) => {
             error!("Password change error: {}", e);
             Err(ApiError::InternalError(
@@ -787,19 +907,16 @@ pub async fn admin_create_user(
         .create_admin(
             &request.username,
             &request.password,
-            request.email.as_deref(),
-            request.full_name.as_deref(),
+            request.email.clone(),
+            request.full_name.clone(),
         )
         .await
     {
-        Ok(id) => {
-            info!(
-                "Created new admin user '{}' with id {}",
-                request.username, id
-            );
+        Ok(user) => {
+            info!("Created new admin user '{}'", request.username);
             Ok(Json(serde_json::json!({
                 "success": true,
-                "id": id,
+                "username": user.username,
                 "username": request.username
             })))
         }

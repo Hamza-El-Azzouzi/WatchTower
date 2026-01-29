@@ -3,17 +3,41 @@ host = "0.0.0.0"
 port = 8080
 
 [storage]
+# Max points kept in memory before writing to DB
 max_points_per_metric = 10000
 
 [retention]
-metrics_hours = 168  # 7 days
+# Raw metrics: 24 hours
+raw_metrics_hours = 24
+# 1-minute aggregates: 7 days
+minute_aggregates_days = 7
+# 1-hour aggregates: 30 days
+hour_aggregates_days = 30
+# Alerts retention
 alerts_days = 30
+# How often to run cleanup jobs
 cleanup_interval_hours = 1
+
+[aggregation]
+# Run 1-minute aggregation every hour
+minute_interval_hours = 1
+# Run 1-hour aggregation every day
+hour_interval_hours = 24
+
+[alerts]
+# Check alert rules every 30 seconds
+check_interval_seconds = 30
 
 [database]
 enabled = true
-url = "sqlite:/home/helazzou/Desktop/DevOps-Monitoring-System/server/data/monitoring.db"
+url = "postgresql://monitoring_user:monitoring_password@localhost:5432/monitoring"
 
 [auth]
 enabled = true
 require_api_key = true
+
+[websocket]
+# Maximum number of concurrent WebSocket connections
+max_connections = 1000
+# Heartbeat interval in seconds
+heartbeat_interval = 30

@@ -12,6 +12,7 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  TooltipProps,
 } from 'recharts';
 import { getHistoricalMetrics } from '@/lib/api';
 import { formatChartTime, formatBytes } from '@/lib/metrics-utils';
@@ -26,8 +27,38 @@ interface ChartData {
   [key: string]: string | number;
 }
 
+// Custom tooltip component for displaying exact values
+const CustomTooltip = ({ active, payload, label }: TooltipProps<number, string>) => {
+  if (active && payload && payload.length) {
+    return (
+      <div style={{
+        backgroundColor: 'rgba(26,26,26,0.95)',
+        border: '1px solid rgba(99,102,241,0.3)',
+        borderRadius: '8px',
+        padding: '12px',
+        color: '#f5f5f5'
+      }}>
+        <p style={{ marginBottom: '8px', fontWeight: 'bold' }}>{label}</p>
+        {payload.map((entry, index) => (
+          <p key={index} style={{ color: entry.color, margin: '4px 0' }}>
+            {entry.name}: {typeof entry.value === 'number' ? entry.value.toFixed(2) : entry.value}
+            {entry.dataKey && String(entry.dataKey).includes('core') ? '%' : ''}
+            {entry.dataKey === 'cpu' ? '%' : ''}
+            {entry.dataKey === 'memory' || entry.dataKey === 'swap' ? '%' : ''}
+            {entry.dataKey === 'usage' ? '%' : ''}
+            {entry.dataKey === 'rx' || entry.dataKey === 'tx' ? ' MB' : ''}
+          </p>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
+
 export default function ChartsSection({ agentId }: ChartsSectionProps) {
   const [cpuData, setCpuData] = useState<ChartData[]>([]);
+  const [cpuCoreData, setCpuCoreData] = useState<ChartData[]>([]);
+  const [coreCount, setCoreCount] = useState<number>(0);
   const [memoryData, setMemoryData] = useState<ChartData[]>([]);
   const [diskData, setDiskData] = useState<ChartData[]>([]);
   const [networkData, setNetworkData] = useState<ChartData[]>([]);
@@ -62,43 +93,90 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
         
         const limit = getLimitForTimeRange(timeRange);
 
+        // First, fetch one metric to determine how many CPU cores exist
+        const sampleMetric = await getHistoricalMetrics(agentId, 'cpu_usage', 1);
+        
+        // Check for cpu_core_N metrics to determine core count
+        let detectedCores = 0;
+        for (let i = 0; i < 128; i++) { // Check up to 128 cores
+          try {
+            const coreMetric = await getHistoricalMetrics(agentId, `cpu_core_${i}`, 1);
+            if (coreMetric.data_points.length > 0) {
+              detectedCores = i + 1;
+            } else {
+              break;
+            }
+          } catch {
+            break;
+          }
+        }
+        setCoreCount(detectedCores);
+
         // Fetch all metric data in parallel
-        const [cpuRes, memoryRes, diskRes, networkRxRes, networkTxRes] = await Promise.all([
+        const fetchPromises = [
           getHistoricalMetrics(agentId, 'cpu_usage', limit),
           getHistoricalMetrics(agentId, 'memory_usage', limit),
+          getHistoricalMetrics(agentId, 'swap_usage', limit),
           getHistoricalMetrics(agentId, 'disk_usage', limit),
           getHistoricalMetrics(agentId, 'network_rx_bytes', limit),
           getHistoricalMetrics(agentId, 'network_tx_bytes', limit),
-        ]);
+        ];
 
-        // Process CPU data
+        // Add per-core CPU metrics
+        const corePromises = [];
+        for (let i = 0; i < detectedCores; i++) {
+          corePromises.push(getHistoricalMetrics(agentId, `cpu_core_${i}`, limit));
+        }
+
+        const [cpuRes, memoryRes, swapRes, diskRes, networkRxRes, networkTxRes, ...coreResults] = 
+          await Promise.all([...fetchPromises, ...corePromises]);
+
+        // Process CPU data - use exact values without rounding
         const cpuChartData = cpuRes.data_points.map((point: DataPoint) => ({
           timestamp: formatChartTime(point.timestamp),
-          cpu: Number(point.value.toFixed(1)),
+          cpu: point.value,
         }));
         setCpuData(cpuChartData);
 
-        // Process Memory data (percentage values)
-        const memoryChartData = memoryRes.data_points.map((point: DataPoint) => ({
+        // Process per-core CPU data - use exact values
+        if (coreResults.length > 0 && coreResults[0].data_points.length > 0) {
+          const coreChartData = coreResults[0].data_points.map((point: DataPoint, idx: number) => {
+            const dataPoint: ChartData = {
+              timestamp: formatChartTime(point.timestamp),
+            };
+            
+            // Add each core's data with full precision
+            coreResults.forEach((coreRes, coreIdx) => {
+              if (coreRes.data_points[idx]) {
+                dataPoint[`core${coreIdx}`] = coreRes.data_points[idx].value;
+              }
+            });
+            
+            return dataPoint;
+          });
+          setCpuCoreData(coreChartData);
+        }
+
+        // Process Memory data (percentage values) - use exact values
+        const memoryChartData = memoryRes.data_points.map((point: DataPoint, idx: number) => ({
           timestamp: formatChartTime(point.timestamp),
-          usage: Number(point.value.toFixed(2)),
+          memory: point.value,
+          swap: swapRes.data_points[idx] ? swapRes.data_points[idx].value : 0,
         }));
         setMemoryData(memoryChartData);
 
-        // Process Disk data (percentage values)
+        // Process Disk data (percentage values) - use exact values
         const diskChartData = diskRes.data_points.map((point: DataPoint) => ({
           timestamp: formatChartTime(point.timestamp),
-          usage: Number(point.value.toFixed(2)),
+          usage: point.value,
         }));
         setDiskData(diskChartData);
 
-        // Process Network data
+        // Process Network data - convert to MB without premature rounding
         const networkChartData = networkRxRes.data_points.map((point: DataPoint, idx: number) => ({
           timestamp: formatChartTime(point.timestamp),
-          rx: Number((point.value / (1024 * 1024)).toFixed(2)),
-          tx: Number(
-            (networkTxRes.data_points[idx]?.value / (1024 * 1024) || 0).toFixed(2)
-          ),
+          rx: point.value / (1024 * 1024),
+          tx: (networkTxRes.data_points[idx]?.value / (1024 * 1024)) || 0,
         }));
         setNetworkData(networkChartData);
 
@@ -115,8 +193,8 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
 
     fetchChartData();
     
-    // Auto-refresh every 10 seconds
-    const interval = setInterval(fetchChartData, 10000);
+    // Auto-refresh every 1 second for real-time monitoring
+    const interval = setInterval(fetchChartData, 1000);
     return () => clearInterval(interval);
   }, [agentId, timeRange]);
 
@@ -152,6 +230,42 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Per-Core CPU Chart - Full Width */}
+        {!loading && cpuCoreData.length > 0 && coreCount > 0 && (
+          <div className="lg:col-span-2 glass-morphism rounded-xl border border-border p-6 hover:shadow-lg transition-smooth animate-slide-up">
+            <h3 className="text-lg font-semibold text-foreground mb-4">
+              Per-Core CPU Usage Over Time ({coreCount} cores)
+            </h3>
+            <ResponsiveContainer width="100%" height={400}>
+              <LineChart data={cpuCoreData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
+                <XAxis dataKey="timestamp" stroke="#9ca3af" style={{ fontSize: '12px' }} />
+                <YAxis stroke="#9ca3af" style={{ fontSize: '12px' }} domain={[0, 100]} label={{ value: '%', angle: -90, position: 'insideLeft' }} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend wrapperStyle={{ color: '#9ca3af' }} />
+                {Array.from({ length: coreCount }, (_, i) => {
+                  const colors = [
+                    '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899',
+                    '#14b8a6', '#f97316', '#06b6d4', '#84cc16', '#a855f7', '#f43f5e'
+                  ];
+                  return (
+                    <Line
+                      key={i}
+                      type="monotone"
+                      dataKey={`core${i}`}
+                      name={`CPU${i+1}`}
+                      stroke={colors[i % colors.length]}
+                      dot={false}
+                      strokeWidth={2}
+                      isAnimationActive={false}
+                    />
+                  );
+                })}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
         {/* CPU Chart */}
         <div className="glass-morphism rounded-xl border border-border p-6 hover:shadow-lg transition-smooth animate-slide-up">
           <h3 className="text-lg font-semibold text-foreground mb-4">CPU Usage Over Time</h3>
@@ -163,7 +277,7 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
                 <XAxis dataKey="timestamp" stroke="#9ca3af" style={{ fontSize: '12px' }} />
                 <YAxis stroke="#9ca3af" style={{ fontSize: '12px' }} domain={[0, 100]} label={{ value: '%', angle: -90, position: 'insideLeft' }} />
-                <Tooltip contentStyle={{ backgroundColor: 'rgba(26,26,26,0.95)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: '8px', color: '#f5f5f5' }} />
+                <Tooltip content={<CustomTooltip />} />
                 <Line
                   type="monotone"
                   dataKey="cpu"
@@ -183,7 +297,7 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
 
         {/* Memory Chart */}
         <div className="glass-morphism rounded-xl border border-border p-6 hover:shadow-lg transition-smooth animate-slide-up" style={{ animationDelay: '50ms' }}>
-          <h3 className="text-lg font-semibold text-foreground mb-4">Memory Usage Over Time</h3>
+          <h3 className="text-lg font-semibold text-foreground mb-4">Memory & Swap Usage Over Time</h3>
           {loading ? (
             skeletonLoader
           ) : memoryData.length > 0 ? (
@@ -192,16 +306,25 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
                 <XAxis dataKey="timestamp" stroke="#9ca3af" style={{ fontSize: '12px' }} />
                 <YAxis stroke="#9ca3af" style={{ fontSize: '12px' }} domain={[0, 100]} label={{ value: '%', angle: -90, position: 'insideLeft' }} />
-                <Tooltip contentStyle={{ backgroundColor: 'rgba(26,26,26,0.95)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: '8px', color: '#f5f5f5' }} />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend wrapperStyle={{ color: '#9ca3af' }} />
                 <Area
                   type="monotone"
-                  dataKey="usage"
+                  dataKey="memory"
+                  name="Memory"
                   stroke="#10b981"
                   fill="#10b981"
                   fillOpacity={0.3}
-                  isAnimationActive={true}
-                  animationDuration={800}
-                  animationEasing="ease-in-out"
+                  isAnimationActive={false}
+                />
+                <Area
+                  type="monotone"
+                  dataKey="swap"
+                  name="Swap"
+                  stroke="#8b5cf6"
+                  fill="#8b5cf6"
+                  fillOpacity={0.3}
+                  isAnimationActive={false}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -221,16 +344,14 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
                 <XAxis dataKey="timestamp" stroke="#9ca3af" style={{ fontSize: '12px' }} />
                 <YAxis stroke="#9ca3af" style={{ fontSize: '12px' }} domain={[0, 100]} label={{ value: '%', angle: -90, position: 'insideLeft' }} />
-                <Tooltip contentStyle={{ backgroundColor: 'rgba(26,26,26,0.95)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: '8px', color: '#f5f5f5' }} />
+                <Tooltip content={<CustomTooltip />} />
                 <Area
                   type="monotone"
                   dataKey="usage"
                   stroke="#f59e0b"
                   fill="#f59e0b"
                   fillOpacity={0.3}
-                  isAnimationActive={true}
-                  animationDuration={800}
-                  animationEasing="ease-in-out"
+                  isAnimationActive={false}
                 />
               </AreaChart>
             </ResponsiveContainer>
@@ -250,7 +371,7 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
                 <XAxis dataKey="timestamp" stroke="#9ca3af" style={{ fontSize: '12px' }} />
                 <YAxis stroke="#9ca3af" style={{ fontSize: '12px' }} label={{ value: 'MB', angle: -90, position: 'insideLeft' }} />
-                <Tooltip contentStyle={{ backgroundColor: 'rgba(26,26,26,0.95)', border: '1px solid rgba(99,102,241,0.3)', borderRadius: '8px', color: '#f5f5f5' }} />
+                <Tooltip content={<CustomTooltip />} />
                 <Legend wrapperStyle={{ color: '#9ca3af' }} />
                 <Line
                   type="monotone"
@@ -259,9 +380,7 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
                   name="RX (Download)"
                   dot={false}
                   strokeWidth={2}
-                  isAnimationActive={true}
-                  animationDuration={800}
-                  animationEasing="ease-in-out"
+                  isAnimationActive={false}
                 />
                 <Line
                   type="monotone"
@@ -270,9 +389,7 @@ export default function ChartsSection({ agentId }: ChartsSectionProps) {
                   name="TX (Upload)"
                   dot={false}
                   strokeWidth={2}
-                  isAnimationActive={true}
-                  animationDuration={800}
-                  animationEasing="ease-in-out"
+                  isAnimationActive={false}
                 />
               </LineChart>
             </ResponsiveContainer>

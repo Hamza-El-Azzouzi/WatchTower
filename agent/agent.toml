@@ -2,7 +2,7 @@
 name = "dev-server-01"
 
 [collection]
-interval_seconds = 10
+interval_seconds = 15
 
 [metrics]
 collect_cpu = true

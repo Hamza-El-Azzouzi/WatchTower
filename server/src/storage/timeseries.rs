@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Some methods are for future use
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -5,6 +7,7 @@ use std::sync::{Arc, RwLock};
 
 /// Log level for log entries
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum LogLevel {
     DEBUG,
     INFO,
@@ -150,7 +153,7 @@ impl TimeSeriesStore {
         timestamp: DateTime<Utc>,
         value: f64,
     ) {
-        let mut data = self.data.write().unwrap();
+        let mut data = self.data.write().expect("metrics data lock poisoned");
 
         let agent_data = data.entry(agent_id).or_default();
         let points = agent_data.entry(metric_name).or_default();
@@ -190,7 +193,7 @@ impl TimeSeriesStore {
         from: Option<DateTime<Utc>>,
         to: Option<DateTime<Utc>>,
     ) -> Vec<DataPoint> {
-        let data = self.data.read().unwrap();
+        let data = self.data.read().expect("metrics data lock poisoned");
 
         data.get(agent_id)
             .and_then(|agent_data| agent_data.get(metric_name))
@@ -210,7 +213,7 @@ impl TimeSeriesStore {
 
     /// Get the latest value for a specific metric
     pub fn get_latest(&self, agent_id: &str, metric_name: &str) -> Option<DataPoint> {
-        let data = self.data.read().unwrap();
+        let data = self.data.read().expect("metrics data lock poisoned");
 
         data.get(agent_id)
             .and_then(|agent_data| agent_data.get(metric_name))
@@ -219,7 +222,7 @@ impl TimeSeriesStore {
 
     /// Get all available metrics for an agent
     pub fn get_agent_metrics(&self, agent_id: &str) -> Vec<String> {
-        let data = self.data.read().unwrap();
+        let data = self.data.read().expect("metrics data lock poisoned");
 
         data.get(agent_id)
             .map(|agent_data| agent_data.keys().cloned().collect())
@@ -228,7 +231,7 @@ impl TimeSeriesStore {
 
     /// Register or update an agent
     pub fn register_agent(&self, agent_id: &str, agent_name: &str) {
-        let mut agents = self.agents.write().unwrap();
+        let mut agents = self.agents.write().expect("agents lock poisoned");
 
         if let Some(agent) = agents.get_mut(agent_id) {
             agent.update_last_seen();
@@ -242,7 +245,7 @@ impl TimeSeriesStore {
 
     /// Get all registered agents
     pub fn get_agents(&self) -> Vec<Agent> {
-        let mut agents = self.agents.write().unwrap();
+        let mut agents = self.agents.write().expect("agents lock poisoned");
 
         // Update status for all agents
         for agent in agents.values_mut() {
@@ -254,7 +257,7 @@ impl TimeSeriesStore {
 
     /// Get a specific agent
     pub fn get_agent(&self, agent_id: &str) -> Option<Agent> {
-        let mut agents = self.agents.write().unwrap();
+        let mut agents = self.agents.write().expect("agents lock poisoned");
 
         agents.get_mut(agent_id).map(|agent| {
             agent.update_status();
@@ -264,8 +267,8 @@ impl TimeSeriesStore {
 
     /// Get storage statistics
     pub fn get_stats(&self) -> StorageStats {
-        let data = self.data.read().unwrap();
-        let agents = self.agents.read().unwrap();
+        let data = self.data.read().expect("metrics data lock poisoned");
+        let agents = self.agents.read().expect("agents lock poisoned");
 
         let total_agents = agents.len();
         let mut total_metrics = 0;
@@ -290,8 +293,8 @@ impl TimeSeriesStore {
         // Register or update agent
         self.register_agent(&payload.agent_id, &payload.agent_id);
 
-        let mut logs = self.logs.write().unwrap();
-        let mut next_id = self.next_log_id.write().unwrap();
+        let mut logs = self.logs.write().expect("logs lock poisoned");
+        let mut next_id = self.next_log_id.write().expect("log id lock poisoned");
 
         // Convert input logs to log entries with IDs
         for log_input in payload.logs {
@@ -328,7 +331,7 @@ impl TimeSeriesStore {
         keyword: Option<&str>,
         limit: Option<usize>,
     ) -> Vec<LogEntry> {
-        let logs = self.logs.read().unwrap();
+        let logs = self.logs.read().expect("logs lock poisoned");
 
         let filtered: Vec<LogEntry> = logs
             .iter()
@@ -382,13 +385,13 @@ impl TimeSeriesStore {
 
     /// Get total log count
     pub fn get_log_count(&self) -> usize {
-        let logs = self.logs.read().unwrap();
+        let logs = self.logs.read().expect("logs lock poisoned");
         logs.len()
     }
 
     /// Clean up old logs (older than specified duration in seconds)
     pub fn cleanup_old_logs(&self, max_age_seconds: i64) {
-        let mut logs = self.logs.write().unwrap();
+        let mut logs = self.logs.write().expect("logs lock poisoned");
         let cutoff = Utc::now() - chrono::Duration::seconds(max_age_seconds);
 
         logs.retain(|log| log.timestamp > cutoff);

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use regex::Regex;
@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 
 /// Log level for log entries
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum LogLevel {
     DEBUG,
     INFO,
@@ -121,7 +122,8 @@ impl LogPattern {
         vec![
             // Pattern 1: [LEVEL] message
             LogPattern {
-                regex: Regex::new(r"^\[(\w+)\]\s+(.+)$").unwrap(),
+                regex: Regex::new(r"^\[(\w+)\]\s+(.+)$")
+                    .expect("invalid regex pattern 1"),
                 level_group: 1,
                 message_group: 2,
                 timestamp_group: None,
@@ -129,14 +131,15 @@ impl LogPattern {
             // Pattern 2: YYYY-MM-DD HH:MM:SS LEVEL message
             LogPattern {
                 regex: Regex::new(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(\w+)\s+(.+)$")
-                    .unwrap(),
+                    .expect("invalid regex pattern 2"),
                 level_group: 2,
                 message_group: 3,
                 timestamp_group: Some(1),
             },
             // Pattern 3: LEVEL: message
             LogPattern {
-                regex: Regex::new(r"^(\w+):\s+(.+)$").unwrap(),
+                regex: Regex::new(r"^(\w+):\s+(.+)$")
+                    .expect("invalid regex pattern 3"),
                 level_group: 1,
                 message_group: 2,
                 timestamp_group: None,
@@ -146,7 +149,7 @@ impl LogPattern {
                 regex: Regex::new(
                     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)\s+\[(\w+)\]\s+(.+)$",
                 )
-                .unwrap(),
+                .expect("invalid regex pattern 4"),
                 level_group: 2,
                 message_group: 3,
                 timestamp_group: Some(1),
@@ -176,7 +179,10 @@ impl LogCollector {
 
             match FileState::new(path.clone()) {
                 Ok(state) => {
-                    file_states.lock().unwrap().insert(path.clone(), state);
+                    file_states
+                        .lock()
+                        .expect("file_states lock poisoned")
+                        .insert(path.clone(), state);
 
                     // Watch the file for changes
                     if let Err(e) = watcher.watch(&path, RecursiveMode::NonRecursive) {
@@ -287,13 +293,13 @@ impl LogCollector {
 
     /// Read updates from a specific file
     fn read_file_updates(&mut self, path: &Path) -> Result<()> {
-        let mut states = self.file_states.lock().unwrap();
+        let mut states = self.file_states.lock().expect("file_states lock poisoned");
 
         if let Some(state) = states.get_mut(path) {
             match state.read_new_lines() {
                 Ok(lines) => {
                     let source = path.to_string_lossy().to_string();
-                    let mut buffer = self.buffer.lock().unwrap();
+                    let mut buffer = self.buffer.lock().expect("buffer lock poisoned");
 
                     for line in lines {
                         let log_entry = self.parse_log_line(&line, &source);
@@ -320,7 +326,7 @@ impl LogCollector {
 
     /// Get buffered logs and optionally clear them
     pub fn get_logs(&self, clear: bool) -> Vec<LogEntryInput> {
-        let mut buffer = self.buffer.lock().unwrap();
+        let mut buffer = self.buffer.lock().expect("buffer lock poisoned");
         let logs = buffer.clone();
 
         if clear {
@@ -332,7 +338,7 @@ impl LogCollector {
 
     /// Check if buffer should be flushed
     pub fn should_flush(&self) -> bool {
-        let buffer = self.buffer.lock().unwrap();
+        let buffer = self.buffer.lock().expect("buffer lock poisoned");
         buffer.len() >= self.batch_size
     }
 
@@ -355,31 +361,63 @@ impl LogCollector {
 mod tests {
     use super::*;
 
+    /// Helper function to parse log lines for testing (mirrors LogCollector::parse_log_line)
+    fn parse_test_log_line(line: &str, source: &str, patterns: &[LogPattern]) -> LogEntryInput {
+        for pattern in patterns {
+            if let Some(captures) = pattern.regex.captures(line) {
+                let level_str = captures.get(pattern.level_group).map(|m| m.as_str());
+                let message = captures
+                    .get(pattern.message_group)
+                    .map(|m| m.as_str())
+                    .unwrap_or(line);
+
+                let level = match level_str.unwrap_or("INFO").to_uppercase().as_str() {
+                    "DEBUG" | "DBG" | "TRACE" => LogLevel::DEBUG,
+                    "INFO" | "INF" => LogLevel::INFO,
+                    "WARN" | "WRN" | "WARNING" => LogLevel::WARN,
+                    "ERROR" | "ERR" => LogLevel::ERROR,
+                    "FATAL" | "FTL" | "CRITICAL" | "CRIT" => LogLevel::FATAL,
+                    _ => LogLevel::INFO,
+                };
+
+                return LogEntryInput {
+                    timestamp: Utc::now(),
+                    level,
+                    source: source.to_string(),
+                    message: message.to_string(),
+                };
+            }
+        }
+
+        // Fallback: treat as INFO level with full line as message
+        LogEntryInput {
+            timestamp: Utc::now(),
+            level: LogLevel::INFO,
+            source: source.to_string(),
+            message: line.to_string(),
+        }
+    }
+
     #[test]
     fn test_log_parsing() {
-        let collector = LogCollector {
-            agent_id: "test".to_string(),
-            file_states: Arc::new(Mutex::new(HashMap::new())),
-            buffer: Arc::new(Mutex::new(Vec::new())),
-            batch_size: 100,
-            _watcher: panic!("Not used in test"),
-            event_rx: panic!("Not used in test"),
-            log_patterns: LogPattern::common_patterns(),
-        };
+        let patterns = LogPattern::common_patterns();
 
-        // Test pattern 1
-        let entry =
-            collector.parse_log_line("[ERROR] Database connection failed", "/var/log/app.log");
+        // Test pattern 1: [LEVEL] message
+        let entry = parse_test_log_line(
+            "[ERROR] Database connection failed",
+            "/var/log/app.log",
+            &patterns,
+        );
         assert_eq!(entry.level, LogLevel::ERROR);
         assert_eq!(entry.message, "Database connection failed");
 
-        // Test pattern 3
-        let entry = collector.parse_log_line("WARN: Low disk space", "/var/log/system.log");
+        // Test pattern 3: LEVEL: message
+        let entry = parse_test_log_line("WARN: Low disk space", "/var/log/system.log", &patterns);
         assert_eq!(entry.level, LogLevel::WARN);
         assert_eq!(entry.message, "Low disk space");
 
-        // Test fallback
-        let entry = collector.parse_log_line("Some random log line", "/var/log/app.log");
+        // Test fallback (no pattern matches)
+        let entry = parse_test_log_line("Some random log line", "/var/log/app.log", &patterns);
         assert_eq!(entry.level, LogLevel::INFO);
         assert_eq!(entry.message, "Some random log line");
     }

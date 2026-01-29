@@ -68,6 +68,18 @@ impl MetricsSender {
                     if status.is_success() {
                         debug!("Metrics sent successfully: {}", status);
                         return Ok(());
+                    } else if status == reqwest::StatusCode::FORBIDDEN {
+                        // 403 Forbidden - API key invalid or agent limit reached
+                        let error_msg = response
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Unknown error".to_string());
+                        error!(
+                            "API key is invalid, expired, or agent limit reached: {}",
+                            error_msg
+                        );
+                        error!("Terminating agent due to authentication failure");
+                        std::process::exit(1);
                     } else {
                         let error_msg = response
                             .text()

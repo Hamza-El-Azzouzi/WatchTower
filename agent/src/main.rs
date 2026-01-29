@@ -12,7 +12,11 @@ use tokio::time;
 use tracing::{debug, error, info, warn};
 
 use collector::{
-    cpu::CpuCollector, disk::DiskCollector, memory::MemoryCollector, network::NetworkCollector,
+    cpu::CpuCollector,
+    disk::DiskCollector,
+    gpu::{GpuCollector, TemperatureCollector},
+    memory::MemoryCollector,
+    network::NetworkCollector,
     SystemMetrics,
 };
 use collectors::database::DatabaseCollector;
@@ -43,6 +47,8 @@ struct MetricCollectors {
     memory: MemoryCollector,
     disk: DiskCollector,
     network: NetworkCollector,
+    gpu: GpuCollector,
+    temperature: TemperatureCollector,
 }
 
 impl MetricCollectors {
@@ -52,18 +58,27 @@ impl MetricCollectors {
             memory: MemoryCollector::new(),
             disk: DiskCollector::new(),
             network: NetworkCollector::new(),
+            gpu: GpuCollector::new(),
+            temperature: TemperatureCollector::new(),
         }
     }
 
     fn collect(&mut self, config: &Config) -> SystemMetrics {
-        let cpu_percent = if config.metrics.collect_cpu {
-            self.cpu.collect()
+        // Collect CPU metrics in one pass (more efficient)
+        let (cpu_percent, cpu_per_core) = if config.metrics.collect_cpu {
+            self.cpu.collect_all()
         } else {
-            0.0
+            (0.0, Vec::new())
         };
 
         let (memory_used, memory_total, memory_percent) = if config.metrics.collect_memory {
             self.memory.collect()
+        } else {
+            (0, 0, 0.0)
+        };
+
+        let (swap_used, swap_total, swap_percent) = if config.metrics.collect_memory {
+            self.memory.collect_swap()
         } else {
             (0, 0, 0.0)
         };
@@ -80,16 +95,36 @@ impl MetricCollectors {
             (0, 0)
         };
 
+        // Collect temperature metrics
+        let cpu_temp_celsius = self.temperature.collect_cpu_temp();
+        let gpu_temp_celsius = self.temperature.collect_gpu_temp();
+
+        // Collect GPU metrics
+        let gpu_usage_percent = self.gpu.collect_usage();
+        let (gpu_memory_used, gpu_memory_total) = match self.gpu.collect_memory() {
+            Some((used, total)) => (Some(used), Some(total)),
+            None => (None, None),
+        };
+
         SystemMetrics {
             cpu_percent,
+            cpu_per_core,
             memory_used_bytes: memory_used,
             memory_total_bytes: memory_total,
             memory_percent,
+            swap_used_bytes: swap_used,
+            swap_total_bytes: swap_total,
+            swap_percent,
             disk_used_bytes: disk_used,
             disk_total_bytes: disk_total,
             disk_percent,
             network_rx_bytes: network_rx,
             network_tx_bytes: network_tx,
+            cpu_temp_celsius,
+            gpu_temp_celsius,
+            gpu_usage_percent,
+            gpu_memory_used,
+            gpu_memory_total,
         }
     }
 }
@@ -207,26 +242,7 @@ async fn run_agent(config: Config) -> Result<()> {
 
         // Send metrics to server if enabled
         if let Some(ref sender) = sender {
-            let mut metrics_map = std::collections::HashMap::new();
-            metrics_map.insert("cpu_usage".to_string(), metrics.cpu_percent as f64);
-            metrics_map.insert("memory_usage".to_string(), metrics.memory_percent as f64);
-            metrics_map.insert("disk_usage".to_string(), metrics.disk_percent as f64);
-            metrics_map.insert(
-                "disk_used_bytes".to_string(),
-                metrics.disk_used_bytes as f64,
-            );
-            metrics_map.insert(
-                "disk_total_bytes".to_string(),
-                metrics.disk_total_bytes as f64,
-            );
-            metrics_map.insert(
-                "network_rx_bytes".to_string(),
-                metrics.network_rx_bytes as f64,
-            );
-            metrics_map.insert(
-                "network_tx_bytes".to_string(),
-                metrics.network_tx_bytes as f64,
-            );
+            let mut metrics_map = metrics.to_metrics_map();
 
             // Collect database metrics if database collector is enabled
             if let Some(ref db_collector) = db_collector {
