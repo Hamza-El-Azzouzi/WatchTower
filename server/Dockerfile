@@ -1,11 +1,12 @@
 # Multi-stage build for DevOps Monitoring Server
 # Stage 1: Build the Rust application
-FROM rust:1.75-slim as builder
+FROM rust:1.75-slim AS builder
 
-# Install build dependencies
+# Install build dependencies (including PostgreSQL client libraries)
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a new empty project
@@ -25,10 +26,12 @@ RUN cargo build --release
 # Stage 2: Runtime image
 FROM debian:bookworm-slim
 
-# Install runtime dependencies
+# Install runtime dependencies (including PostgreSQL client)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    libpq5 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -56,13 +59,13 @@ EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["/usr/bin/curl", "-f", "http://localhost:8080/health", "||", "exit", "1"]
+    CMD curl -f http://localhost:8080/health || exit 1
 
 # Default environment variables (can be overridden)
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8080
 ENV DATABASE_ENABLED=true
-ENV DATABASE_URL=sqlite:/app/data/monitoring.db
+ENV DATABASE_URL=postgresql://monitoring_user:monitoring_pass@postgres:5432/monitoring
 ENV AUTH_ENABLED=true
 ENV AUTH_REQUIRE_API_KEY=false
 
