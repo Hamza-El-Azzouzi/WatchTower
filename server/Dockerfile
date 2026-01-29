@@ -1,6 +1,6 @@
 # Multi-stage build for DevOps Monitoring Server
 # Stage 1: Build the Rust application
-FROM rust:1.75-slim AS builder
+FROM rust:latest AS builder
 
 # Install build dependencies (including PostgreSQL client libraries)
 RUN apt-get update && apt-get install -y \
@@ -12,12 +12,16 @@ RUN apt-get update && apt-get install -y \
 # Create a new empty project
 WORKDIR /app
 
-# Copy manifests
+# Copy manifests first for better caching
 COPY Cargo.toml Cargo.lock ./
 
-# Copy source code
+# Build dependencies only (cached layer)
+RUN cargo build --release || true
+
+# Copy actual source code
 COPY src ./src
 COPY migrations ./migrations
+COPY benches ./benches
 COPY config.toml ./config.toml
 
 # Build for release with optimizations

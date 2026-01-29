@@ -43,7 +43,7 @@ base64 = "0.21"
 
 # Database - PostgreSQL with SQLx
 sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid", "migrate"] }
-bcrypt = "0.18.0"
+bcrypt = "0.15"
 jsonwebtoken = "9.3"
 
 [dev-dependencies]
