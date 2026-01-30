@@ -11,24 +11,40 @@ import {
 } from "@/lib/websocket";
 
 /**
- * Hook for managing WebSocket connection state
+ * Hook for real-time metrics updates - simplified, self-contained implementation
  */
-export function useWebSocket(endpoint: "metrics" | "logs" | "alerts") {
+export function useMetricsWebSocket(
+  onMetric: (message: WsMetricMessage) => void
+) {
   const [isConnected, setIsConnected] = useState(false);
-  const [connectionState, setConnectionState] = useState<
-    "connecting" | "connected" | "disconnected"
-  >("disconnected");
+  const [connectionState, setConnectionState] = useState<string>("disconnected");
   const wsManagerRef = useRef<WebSocketManager | null>(null);
+  const onMetricRef = useRef(onMetric);
+  
+  // Keep callback ref updated
+  useEffect(() => {
+    onMetricRef.current = onMetric;
+  }, [onMetric]);
 
   useEffect(() => {
+    console.log("[useMetricsWebSocket] Initializing WebSocket connection...");
+    
     // Create WebSocket manager
-    const manager = createWebSocketManager(endpoint);
+    const manager = createWebSocketManager("metrics");
     wsManagerRef.current = manager;
 
     // Subscribe to state changes
     const unsubscribeState = manager.onStateChange((state) => {
-      setConnectionState(state as any);
+      console.log("[useMetricsWebSocket] Connection state:", state);
+      setConnectionState(state);
       setIsConnected(state === "connected");
+    });
+
+    // Subscribe to messages
+    const unsubscribeMessages = manager.subscribe((message: WsMessage) => {
+      if (typeof message !== "string" && "Metric" in message) {
+        onMetricRef.current(message as WsMetricMessage);
+      }
     });
 
     // Connect
@@ -36,180 +52,103 @@ export function useWebSocket(endpoint: "metrics" | "logs" | "alerts") {
 
     // Cleanup on unmount
     return () => {
+      console.log("[useMetricsWebSocket] Cleaning up WebSocket connection...");
       unsubscribeState();
+      unsubscribeMessages();
       manager.disconnect();
       wsManagerRef.current = null;
     };
-  }, [endpoint]);
-
-  return {
-    isConnected,
-    connectionState,
-    manager: wsManagerRef.current,
-  };
-}
-
-/**
- * Hook for subscribing to WebSocket messages
- */
-export function useWebSocketSubscription<T = WsMessage>(
-  endpoint: "metrics" | "logs" | "alerts",
-  callback: (message: T) => void,
-  deps: React.DependencyList = []
-) {
-  const { isConnected, connectionState, manager } = useWebSocket(endpoint);
-
-  useEffect(() => {
-    if (!manager) return;
-
-    const unsubscribe = manager.subscribe(callback as any);
-    return unsubscribe;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manager, ...deps]);
+  }, []); // Only run once on mount
 
   return { isConnected, connectionState };
 }
 
 /**
- * Hook for real-time metrics updates
- */
-export function useMetricsWebSocket(
-  onMetric: (message: WsMetricMessage) => void
-) {
-  const [metrics, setMetrics] = useState<Map<string, WsMetricMessage>>(
-    new Map()
-  );
-
-  const handleMessage = useCallback(
-    (message: WsMessage) => {
-      if ("Metric" in message) {
-        const metricMessage = message as WsMetricMessage;
-        const key = `${metricMessage.Metric.agent_id}:${metricMessage.Metric.metric_name}`;
-
-        setMetrics((prev) => {
-          const updated = new Map(prev);
-          updated.set(key, metricMessage);
-          return updated;
-        });
-
-        onMetric(metricMessage);
-      }
-    },
-    [onMetric]
-  );
-
-  const { isConnected, connectionState } = useWebSocketSubscription(
-    "metrics",
-    handleMessage,
-    [handleMessage]
-  );
-
-  return {
-    metrics: Array.from(metrics.values()),
-    isConnected,
-    connectionState,
-  };
-}
-
-/**
- * Hook for real-time log updates
+ * Hook for real-time log updates - simplified, self-contained implementation
  */
 export function useLogsWebSocket(onLog: (message: WsLogMessage) => void) {
-  const [logs, setLogs] = useState<WsLogMessage[]>([]);
-  const maxLogs = 1000; // Keep last 1000 logs in memory
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionState, setConnectionState] = useState<string>("disconnected");
+  const wsManagerRef = useRef<WebSocketManager | null>(null);
+  const onLogRef = useRef(onLog);
+  
+  useEffect(() => {
+    onLogRef.current = onLog;
+  }, [onLog]);
 
-  const handleMessage = useCallback(
-    (message: WsMessage) => {
-      if ("Log" in message) {
-        const logMessage = message as WsLogMessage;
+  useEffect(() => {
+    console.log("[useLogsWebSocket] Initializing WebSocket connection...");
+    
+    const manager = createWebSocketManager("logs");
+    wsManagerRef.current = manager;
 
-        setLogs((prev) => {
-          const updated = [logMessage, ...prev];
-          return updated.slice(0, maxLogs);
-        });
+    const unsubscribeState = manager.onStateChange((state) => {
+      console.log("[useLogsWebSocket] Connection state:", state);
+      setConnectionState(state);
+      setIsConnected(state === "connected");
+    });
 
-        onLog(logMessage);
+    const unsubscribeMessages = manager.subscribe((message: WsMessage) => {
+      if (typeof message !== "string" && "Log" in message) {
+        onLogRef.current(message as WsLogMessage);
       }
-    },
-    [onLog]
-  );
+    });
 
-  const { isConnected, connectionState } = useWebSocketSubscription(
-    "logs",
-    handleMessage,
-    [handleMessage]
-  );
+    manager.connect();
 
-  const clearLogs = useCallback(() => {
-    setLogs([]);
+    return () => {
+      console.log("[useLogsWebSocket] Cleaning up WebSocket connection...");
+      unsubscribeState();
+      unsubscribeMessages();
+      manager.disconnect();
+      wsManagerRef.current = null;
+    };
   }, []);
 
-  return {
-    logs,
-    clearLogs,
-    isConnected,
-    connectionState,
-  };
+  return { isConnected, connectionState };
 }
 
 /**
- * Hook for real-time alert updates
+ * Hook for real-time alert updates - simplified, self-contained implementation
  */
 export function useAlertsWebSocket(onAlert: (message: WsAlertMessage) => void) {
-  const [alerts, setAlerts] = useState<Map<number, WsAlertMessage>>(new Map());
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionState, setConnectionState] = useState<string>("disconnected");
+  const wsManagerRef = useRef<WebSocketManager | null>(null);
+  const onAlertRef = useRef(onAlert);
+  
+  useEffect(() => {
+    onAlertRef.current = onAlert;
+  }, [onAlert]);
 
-  const handleMessage = useCallback(
-    (message: WsMessage) => {
-      if ("Alert" in message) {
-        const alertMessage = message as WsAlertMessage;
+  useEffect(() => {
+    console.log("[useAlertsWebSocket] Initializing WebSocket connection...");
+    
+    const manager = createWebSocketManager("alerts");
+    wsManagerRef.current = manager;
 
-        setAlerts((prev) => {
-          const updated = new Map(prev);
-          updated.set(alertMessage.Alert.alert_id, alertMessage);
-          return updated;
-        });
+    const unsubscribeState = manager.onStateChange((state) => {
+      console.log("[useAlertsWebSocket] Connection state:", state);
+      setConnectionState(state);
+      setIsConnected(state === "connected");
+    });
 
-        onAlert(alertMessage);
+    const unsubscribeMessages = manager.subscribe((message: WsMessage) => {
+      if (typeof message !== "string" && "Alert" in message) {
+        onAlertRef.current(message as WsAlertMessage);
       }
-    },
-    [onAlert]
-  );
+    });
 
-  const { isConnected, connectionState } = useWebSocketSubscription(
-    "alerts",
-    handleMessage,
-    [handleMessage]
-  );
+    manager.connect();
 
-  return {
-    alerts: Array.from(alerts.values()),
-    isConnected,
-    connectionState,
-  };
-}
+    return () => {
+      console.log("[useAlertsWebSocket] Cleaning up WebSocket connection...");
+      unsubscribeState();
+      unsubscribeMessages();
+      manager.disconnect();
+      wsManagerRef.current = null;
+    };
+  }, []);
 
-/**
- * Hook for displaying connection status
- */
-export function useConnectionStatus(endpoint: "metrics" | "logs" | "alerts") {
-  const { isConnected, connectionState } = useWebSocket(endpoint);
-
-  const statusText = {
-    connected: "Connected",
-    connecting: "Connecting...",
-    disconnected: "Disconnected",
-  }[connectionState];
-
-  const statusColor = {
-    connected: "green",
-    connecting: "yellow",
-    disconnected: "red",
-  }[connectionState];
-
-  return {
-    isConnected,
-    connectionState,
-    statusText,
-    statusColor,
-  };
+  return { isConnected, connectionState };
 }

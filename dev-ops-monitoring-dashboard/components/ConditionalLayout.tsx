@@ -6,10 +6,10 @@ import { Sidebar } from '@/components/Sidebar'
 export function ConditionalLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   
-  // Don't show sidebar on login pages
-  const isLoginPage = pathname === '/login' || pathname === '/admin-login'
+  // Don't show sidebar on login and public pages
+  const isPublicPage = pathname === '/login' || pathname === '/admin-login' || pathname === '/request' || pathname === '/ws-test'
 
-  if (isLoginPage) {
+  if (isPublicPage) {
     return <>{children}</>
   }
 

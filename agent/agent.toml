@@ -9,9 +9,19 @@ collect_cpu = true
 collect_memory = true
 collect_disk = true
 collect_network = true
+
 [server]
 enabled = true
 url = "http://10.1.5.1:8080"
-api_key = "msk_XFwSuHsgoSxPyMa32WHPcrjM6iYQBuTEcFhBlmJqiLw"  # Get from admin dashboard: http://localhost:3000/admin/api-keys
+api_key = "msk_Sqc0yv2NXMxIIwxNjeaEqAGECU-UImLILAsWmj0Mokg"  # Get from admin dashboard: http://localhost:3000/admin/api-keys
 retry_attempts = 3
 retry_delay_seconds = 2
+
+[database]
+enabled = true
+db_type = "postgres"
+host = "localhost"
+port = 5432
+database = "monitoring"
+username = "monitoring_user"
+password = "monitoring_password"

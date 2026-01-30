@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Shield, Key, Activity, Server, Database, TrendingUp, Users, AlertTriangle } from 'lucide-react'
+import { Shield, Key, Activity, Server, Database, TrendingUp, Users, AlertTriangle, UserPlus } from 'lucide-react'
 import { listApiKeys, type ApiKey } from '@/lib/api-keys-api'
 import { getAgents, getStats } from '@/lib/api'
 import { getAlerts } from '@/lib/alerts-api'
@@ -12,6 +12,7 @@ export default function AdminDashboard() {
   const [agents, setAgents] = useState<any[]>([])
   const [stats, setStats] = useState<any>(null)
   const [alerts, setAlerts] = useState<any>(null)
+  const [pendingRequests, setPendingRequests] = useState<number>(0)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -21,12 +22,29 @@ export default function AdminDashboard() {
   const loadData = async () => {
     try {
       setLoading(true)
+      const token = localStorage.getItem('admin_token')
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+      
       const [keysData, agentsData, statsData, alertsData] = await Promise.all([
         listApiKeys(),
         getAgents(),
         getStats(),
         getAlerts()
       ])
+      
+      // Fetch pending agent requests
+      try {
+        const reqResponse = await fetch(`${apiUrl}/api/v1/requests/agents?status=pending`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+        if (reqResponse.ok) {
+          const reqData = await reqResponse.json()
+          setPendingRequests(reqData.requests?.length || 0)
+        }
+      } catch (e) {
+        console.error('Failed to fetch requests:', e)
+      }
+      
       setKeys(keysData)
       setAgents(agentsData)
       setStats(statsData)
@@ -85,6 +103,14 @@ export default function AdminDashboard() {
       color: 'text-red-500',
       bgColor: 'bg-red-500/10',
       link: '/alerts'
+    },
+    {
+      title: 'Pending Requests',
+      value: pendingRequests,
+      icon: UserPlus,
+      color: 'text-orange-500',
+      bgColor: 'bg-orange-500/10',
+      link: '/admin/requests'
     }
   ]
 

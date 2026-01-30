@@ -16,21 +16,28 @@ export default function LoginPage() {
     setLoading(true)
 
     try {
-      // Validate the API key by making a test request
-      const response = await fetch('http://localhost:8080/api/v1/agents', {
+      // Validate the API key using the validation endpoint
+      const response = await fetch('http://localhost:8080/api/v1/auth/validate', {
         headers: {
           'X-API-Key': apiKey
         }
       })
 
       if (response.ok) {
-        // Store the API key
-        localStorage.setItem('api_key', apiKey)
-        
-        // Redirect to dashboard
-        router.push('/')
-      } else if (response.status === 401 || response.status === 403) {
-        setError('Invalid API key. Please check and try again.')
+        const data = await response.json()
+        if (data.valid) {
+          // Store the API key
+          localStorage.setItem('api_key', apiKey)
+          localStorage.setItem('user_type', 'user')
+          
+          // Redirect to dashboard
+          router.push('/')
+        } else {
+          setError('Invalid API key. Please check and try again.')
+        }
+      } else if (response.status === 400 || response.status === 401 || response.status === 403) {
+        const errorData = await response.json().catch(() => ({}))
+        setError(errorData.error || 'Invalid API key. Please check and try again.')
       } else {
         setError('Unable to verify API key. Please ensure the server is running.')
       }
@@ -114,11 +121,11 @@ export default function LoginPage() {
           </form>
 
           {/* Help Text */}
-          <div className="mt-6 pt-6 border-t border-gray-700">
+          <div className="mt-6 pt-6 border-t border-gray-700 space-y-3">
             <p className="text-sm text-gray-400 text-center">
-              Don't have an API key?{' '}
-              <a href="#" className="text-blue-400 hover:text-blue-300 font-medium">
-                Contact your administrator
+              Don&apos;t have an API key?{' '}
+              <a href="/request" className="text-blue-400 hover:text-blue-300 font-medium">
+                Request agent quota
               </a>
             </p>
           </div>

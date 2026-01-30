@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import { Bell, Plus, AlertTriangle, CheckCircle, Clock, Settings, Edit, Trash2, Power } from 'lucide-react';
+import { Bell, Plus, AlertTriangle, CheckCircle, Clock, Settings, Edit, Trash2, Power, Wifi, WifiOff } from 'lucide-react';
 import { getAlerts, getAlertRules, acknowledgeAlert, deleteAlertRule, toggleAlertRule, Alert, AlertRule } from '@/lib/alerts-api';
 import { AlertDetailModal } from '@/components/AlertDetailModal';
+import { useAlertsWebSocket } from '@/hooks/useWebSocket';
+import { WsAlertMessage } from '@/lib/websocket';
 
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -13,10 +15,17 @@ export default function AlertsPage() {
   const [activeTab, setActiveTab] = useState<'active' | 'history' | 'rules'>('active');
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
 
+  // Handle real-time alert updates via WebSocket
+  const handleAlertMessage = useCallback((message: WsAlertMessage) => {
+    // Refresh alerts when we receive a WebSocket alert
+    fetchData();
+  }, []);
+
+  const { isConnected: wsConnected } = useAlertsWebSocket(handleAlertMessage);
+
+  // Initial load and when filters change
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 10000);
-    return () => clearInterval(interval);
   }, []);
 
   const fetchData = async () => {

@@ -114,9 +114,14 @@ async fn main() -> Result<()> {
         config.storage.max_points_per_metric
     );
 
-    // Initialize alert manager
-    let alert_manager = Arc::new(alerts::manager::AlertManager::new(store.clone()));
-    info!("Initialized alert manager");
+    // Initialize alert manager (requires database for persistence)
+    let alert_manager = if let Some(ref db) = database {
+        Arc::new(alerts::manager::AlertManager::new(store.clone(), db.clone()).await)
+    } else {
+        error!("Database is required for AlertManager. Please configure database connection.");
+        std::process::exit(1);
+    };
+    info!("Initialized alert manager with database persistence");
 
     // Initialize WebSocket manager
     let ws_manager = Arc::new(websocket::WebSocketManager::new());
@@ -197,10 +202,40 @@ async fn main() -> Result<()> {
         ws_manager.clone(),
     ));
 
-    // Build router with protected routes (only POST metrics and logs - for agents sending data)
+    // Build router with protected routes (metrics/logs ingestion + dashboard read endpoints)
     let protected_routes = Router::new()
+        // Agent write endpoints (metrics/logs ingestion)
         .route("/api/v1/metrics", post(api::ingest_metrics))
-        .route("/api/v1/logs", post(api::ingest_logs));
+        .route("/api/v1/logs", post(api::ingest_logs))
+        // Dashboard read endpoints (require API key)
+        .route("/api/v1/metrics", get(api::query_metrics))
+        .route("/api/v1/metrics/latest", get(api::get_latest_metrics))
+        .route("/api/v1/logs", get(api::query_logs))
+        .route("/api/v1/agents", get(api::list_agents))
+        .route("/api/v1/agents/:agent_id", get(api::get_agent))
+        .route("/api/v1/stats", get(api::get_stats))
+        // Alert endpoints (require API key)
+        .route("/api/v1/alerts", get(api::list_alerts))
+        .route(
+            "/api/v1/alerts/:alert_id/acknowledge",
+            post(api::acknowledge_alert),
+        )
+        // Alert Rule endpoints (require API key)
+        .route("/api/v1/alert-rules", post(api::create_alert_rule))
+        .route("/api/v1/alert-rules", get(api::list_alert_rules))
+        .route("/api/v1/alert-rules/:rule_id", get(api::get_alert_rule))
+        .route(
+            "/api/v1/alert-rules/:rule_id",
+            axum::routing::put(api::update_alert_rule),
+        )
+        .route(
+            "/api/v1/alert-rules/:rule_id",
+            axum::routing::delete(api::delete_alert_rule),
+        )
+        .route(
+            "/api/v1/alert-rules/:rule_id/toggle",
+            post(api::toggle_alert_rule),
+        );
 
     // Apply auth middleware only if auth is enabled and required
     let protected_routes = if config.auth.enabled && config.auth.require_api_key {
@@ -239,58 +274,33 @@ async fn main() -> Result<()> {
             "/api/v1/admin/users/:username/activate",
             post(api::admin_activate_user),
         )
-        // Health check
+        // Health check (public)
         .route("/health", get(api::health_check))
         .route("/api/v1/health", get(api::system_health))
-        // API Key management (no auth required for creating the first key)
+        // API Key validation endpoint (public - used by login)
+        .route("/api/v1/auth/validate", get(api::validate_api_key))
+        // API Key management (admin-only - checked in handlers)
         .route("/api/v1/auth/keys", post(api::create_api_key))
         .route("/api/v1/auth/keys", get(api::list_api_keys))
         .route(
             "/api/v1/auth/keys/:key_id",
             axum::routing::delete(api::revoke_api_key),
+        )
+        // Agent request endpoints (public submit, admin list/update)
+        .route("/api/v1/requests/agents", post(api::submit_agent_request))
+        .route("/api/v1/requests/agents", get(api::list_agent_requests))
+        .route(
+            "/api/v1/requests/agents/:request_id/status",
+            axum::routing::put(api::update_agent_request_status),
         );
 
     let app = Router::new()
         .merge(protected_routes)
         .merge(public_routes)
-        // Read-only metrics endpoints (unprotected - used by dashboard)
-        .route("/api/v1/metrics", get(api::query_metrics))
-        .route("/api/v1/metrics/latest", get(api::get_latest_metrics))
-        // Logs query endpoint (unprotected - used by dashboard)
-        .route("/api/v1/logs", get(api::query_logs))
-        // Agent endpoints (unprotected)
-        .route("/api/v1/agents", get(api::list_agents))
-        .route("/api/v1/agents/:agent_id", get(api::get_agent))
-        // WebSocket endpoints (real-time updates)
+        // WebSocket endpoints (real-time updates - require auth)
         .route("/api/v1/ws/metrics", get(websocket::ws_metrics_handler))
         .route("/api/v1/ws/logs", get(websocket::ws_logs_handler))
         .route("/api/v1/ws/alerts", get(websocket::ws_alerts_handler))
-        // Alert Rule endpoints
-        .route("/api/v1/alert-rules", post(api::create_alert_rule))
-        .route("/api/v1/alert-rules", get(api::list_alert_rules))
-        .route("/api/v1/alert-rules/:rule_id", get(api::get_alert_rule))
-        .route(
-            "/api/v1/alert-rules/:rule_id",
-            axum::routing::put(api::update_alert_rule),
-        )
-        .route(
-            "/api/v1/alert-rules/:rule_id",
-            axum::routing::delete(api::delete_alert_rule),
-        )
-        .route(
-            "/api/v1/alert-rules/:rule_id/toggle",
-            post(api::toggle_alert_rule),
-        )
-        // Alert endpoints
-        .route("/api/v1/alerts", get(api::list_alerts))
-        .route("/api/v1/alerts/:alert_id", get(api::get_alert))
-        .route(
-            "/api/v1/alerts/:alert_id/acknowledge",
-            post(api::acknowledge_alert),
-        )
-        // Stats endpoints
-        .route("/api/v1/stats", get(api::get_stats))
-        .route("/api/v1/db/stats", get(api::get_database_stats))
         // Shared state
         .with_state(state)
         // Middleware

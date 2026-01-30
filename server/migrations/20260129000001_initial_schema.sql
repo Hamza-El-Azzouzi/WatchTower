@@ -1,18 +1,18 @@
 -- Admin Users Table
 CREATE TABLE IF NOT EXISTS admin_users (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     username VARCHAR(255) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     full_name VARCHAR(255),
     email VARCHAR(255),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    last_login TIMESTAMP WITH TIME ZONE,
+    last_login_at TIMESTAMP WITH TIME ZONE,
     is_active BOOLEAN DEFAULT true
 );
 
 -- API Keys Table (with agent limits)
 CREATE TABLE IF NOT EXISTS api_keys (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     key TEXT UNIQUE NOT NULL,
     name VARCHAR(255) NOT NULL,
     description TEXT,
@@ -126,7 +126,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs(created_at);
 
 -- Alerts Table
 CREATE TABLE IF NOT EXISTS alerts (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     alert_id TEXT UNIQUE NOT NULL,
     rule_name TEXT NOT NULL,
     agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
@@ -145,7 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_alerts_triggered_at ON alerts(triggered_at DESC);
 
 -- Alert Rules Table
 CREATE TABLE IF NOT EXISTS alert_rules (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
     description TEXT,
     condition TEXT NOT NULL,
@@ -159,5 +159,5 @@ CREATE TABLE IF NOT EXISTS alert_rules (
 -- Create default admin user (password: admin123 - CHANGE THIS IN PRODUCTION!)
 -- Password hash for 'admin123'
 INSERT INTO admin_users (username, password_hash, full_name, email) 
-VALUES ('admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5ckbvmJ3s.m2G', 'Administrator', 'admin@monitoring.local')
+VALUES ('admin', '$2b$12$mFYO.MsW/zucU1fIDg/vD.Eqyfso4Phf2YzGGFJZcX7yCyDb/cOIu', 'Administrator', 'admin@monitoring.local')
 ON CONFLICT (username) DO NOTHING;

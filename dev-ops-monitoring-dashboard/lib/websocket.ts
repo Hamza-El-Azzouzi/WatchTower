@@ -228,15 +228,37 @@ export function createWebSocketManager(
   endpoint: "metrics" | "logs" | "alerts",
   baseUrl?: string
 ): WebSocketManager {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host = baseUrl || window.location.host;
-  const url = `${protocol}//${host}/api/v1/ws/${endpoint}`;
+  // Determine the WebSocket URL
+  let wsUrl: string;
+  
+  if (baseUrl) {
+    wsUrl = baseUrl.replace(/^http/, 'ws');
+  } else if (typeof window !== 'undefined') {
+    // In browser: use environment variable or derive from current location
+    const envUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (envUrl && envUrl !== 'http://localhost:8080') {
+      wsUrl = envUrl.replace(/^http/, 'ws');
+    } else {
+      // Fallback: assume API is on port 8080 of the same host
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.hostname;
+      wsUrl = `${protocol}//${host}:8080`;
+    }
+  } else {
+    // Server-side: use environment variable or default
+    const envUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+    wsUrl = envUrl.replace(/^http/, 'ws');
+  }
+  
+  const url = `${wsUrl}/api/v1/ws/${endpoint}`;
+  
+  console.log(`[WebSocket] Creating manager for ${endpoint} at ${url}`);
 
   return new WebSocketManager({
     url,
     reconnectDelay: 1000,
     maxReconnectDelay: 30000,
     reconnectAttempts: Infinity,
-    debug: process.env.NODE_ENV === "development",
+    debug: true, // Always enable debug for now
   });
 }

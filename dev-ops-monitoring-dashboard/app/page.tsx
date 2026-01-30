@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import PageHeader from '@/components/PageHeader';
 import HeroBanner from '@/components/HeroBanner';
 import StatsCards from '@/components/StatsCards';
@@ -8,36 +8,59 @@ import ServerCard from '@/components/ServerCard';
 import SystemHealthOverview from '@/components/SystemHealthOverview';
 import { getAgents } from '@/lib/api';
 import { Agent } from '@/types';
-import { AlertCircle, Loader } from 'lucide-react';
+import { AlertCircle, Loader, Wifi, WifiOff } from 'lucide-react';
+import { useMetricsWebSocket } from '@/hooks/useWebSocket';
+import { WsMetricMessage } from '@/lib/websocket';
 
 export default function OverviewPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState(new Date());
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const fetchAgents = async () => {
-    try {
-      setIsRefreshing(true);
-      const data = await getAgents();
-      setAgents(data);
-      setLastUpdated(new Date());
-      setError(null);
-    } catch {
-      setError('Failed to load servers. Make sure the API is running at http://localhost:8080');
-    } finally {
-      setLoading(false);
-      setIsRefreshing(false);
-    }
-  };
-
+  // Log component mount
   useEffect(() => {
-    fetchAgents();
+    console.log('[OverviewPage] Component mounted');
+    return () => console.log('[OverviewPage] Component unmounted');
+  }, []);
 
-    // Poll every 10 seconds
-    const interval = setInterval(fetchAgents, 10000);
-    return () => clearInterval(interval);
+  // Subscribe to WebSocket for real-time metrics
+  const handleMetricUpdate = useCallback((metricMessage: WsMetricMessage) => {
+    console.log('[OverviewPage] Received metric update:', metricMessage);
+    setLastUpdated(new Date());
+    // Update agent metrics in real-time as they come in via WebSocket
+    setAgents(prev => 
+      prev.map(agent => 
+        agent.agent_id === metricMessage.Metric.agent_id
+          ? { ...agent, last_seen: metricMessage.Metric.timestamp }
+          : agent
+      )
+    );
+  }, []);
+
+  const { isConnected: wsConnected } = useMetricsWebSocket(handleMetricUpdate);
+  
+  // Log connection state changes
+  useEffect(() => {
+    console.log('[OverviewPage] WebSocket connected:', wsConnected);
+  }, [wsConnected]);
+
+  // Initial load of agents (one-time HTTP fetch)
+  useEffect(() => {
+    const fetchAgents = async () => {
+      try {
+        const data = await getAgents();
+        setAgents(data);
+        setLastUpdated(new Date());
+        setError(null);
+      } catch {
+        setError('Failed to load servers. Make sure the API is running at http://localhost:8080');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchAgents();
   }, []);
 
   return (
@@ -90,7 +113,18 @@ export default function OverviewPage() {
 
             <div className="mt-12 pt-8 border-t border-border flex items-center justify-between">
               <div className="text-xs text-muted-foreground flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse-soft" />
+                {wsConnected ? (
+                  <>
+                    <Wifi className="w-3 h-3 text-emerald-500" />
+                    <span className="text-emerald-500">WebSocket Connected</span>
+                  </>
+                ) : (
+                  <>
+                    <WifiOff className="w-3 h-3 text-amber-500" />
+                    <span className="text-amber-500">WebSocket Disconnected</span>
+                  </>
+                )}
+                <span className="mx-2">•</span>
                 Last updated: {lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
               </div>
               <div className="flex items-center gap-3">
@@ -98,7 +132,6 @@ export default function OverviewPage() {
                   <div className="text-xs text-muted-foreground">Monitoring Status</div>
                   <div className="text-sm font-medium text-emerald-400">All Systems Normal</div>
                 </div>
-                {isRefreshing && <Loader className="w-4 h-4 text-accent animate-spin" />}
               </div>
             </div>
           </>

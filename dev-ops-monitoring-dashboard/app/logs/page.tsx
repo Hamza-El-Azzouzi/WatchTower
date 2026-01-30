@@ -1,8 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getAgents } from '@/lib/api';
 import { Agent } from '@/types';
+import { useLogsWebSocket } from '@/hooks/useWebSocket';
+import { WsLogMessage } from '@/lib/websocket';
 
 // Log level enum
 type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
@@ -47,7 +49,30 @@ export default function LogsPage() {
   const [limit, setLimit] = useState(100);
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  // Fetch logs from API
+  // Handle real-time log messages via WebSocket
+  const handleLogMessage = useCallback((message: WsLogMessage) => {
+    const newLog: LogEntry = {
+      id: Date.now(), // Generate a temporary ID
+      agent_id: message.Log.agent_id,
+      timestamp: message.Log.timestamp,
+      level: message.Log.level.toUpperCase() as LogLevel,
+      source: 'websocket',
+      message: message.Log.message
+    };
+    
+    // Apply filters
+    if (selectedAgent && newLog.agent_id !== selectedAgent) return;
+    if (selectedLevel && newLog.level !== selectedLevel) return;
+    if (keyword && !newLog.message.toLowerCase().includes(keyword.toLowerCase())) return;
+    
+    // Add to logs and keep max limit
+    setLogs(prev => [newLog, ...prev].slice(0, limit));
+    setTotalCount(prev => prev + 1);
+  }, [selectedAgent, selectedLevel, keyword, limit]);
+
+  const { isConnected: wsConnected } = useLogsWebSocket(handleLogMessage);
+
+  // Initial load from HTTP API (get historical logs)
   const fetchLogs = async () => {
     try {
       const params = new URLSearchParams();
@@ -94,16 +119,12 @@ export default function LogsPage() {
     fetchLogs();
   }, [selectedAgent, selectedLevel, keyword, limit]);
 
-  // Auto-refresh every 5 seconds
-  useEffect(() => {
-    if (!autoRefresh) return;
-
-    const interval = setInterval(() => {
-      fetchLogs();
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [autoRefresh, selectedAgent, selectedLevel, keyword, limit]);
+  // Remove auto-refresh polling - WebSocket handles real-time updates
+  // Auto-refresh is now just for clearing the view
+  const handleClearLogs = () => {
+    setLogs([]);
+    fetchLogs();
+  };
 
   // Format timestamp
   const formatTimestamp = (timestamp: string) => {

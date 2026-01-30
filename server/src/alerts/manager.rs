@@ -2,28 +2,69 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::{error, info};
 use uuid::Uuid;
 
 use super::{
     Alert, AlertEvaluation, AlertRule, AlertState, CreateAlertRuleRequest, UpdateAlertRuleRequest,
 };
+use crate::db::Database;
 use crate::storage::TimeSeriesStore;
 
 pub struct AlertManager {
-    rules: Arc<RwLock<HashMap<String, AlertRule>>>,
-    alerts: Arc<RwLock<HashMap<String, Alert>>>,
+    // In-memory cache for fast evaluation - synced with database
+    rules_cache: Arc<RwLock<HashMap<String, AlertRule>>>,
+    alerts_cache: Arc<RwLock<HashMap<String, Alert>>>,
     evaluations: Arc<RwLock<HashMap<String, AlertEvaluation>>>, // Key: "rule_id:agent_id"
     metrics_storage: TimeSeriesStore,
+    database: Arc<Database>,
 }
 
 impl AlertManager {
-    pub fn new(metrics_storage: TimeSeriesStore) -> Self {
-        Self {
-            rules: Arc::new(RwLock::new(HashMap::new())),
-            alerts: Arc::new(RwLock::new(HashMap::new())),
+    pub async fn new(metrics_storage: TimeSeriesStore, database: Arc<Database>) -> Self {
+        let manager = Self {
+            rules_cache: Arc::new(RwLock::new(HashMap::new())),
+            alerts_cache: Arc::new(RwLock::new(HashMap::new())),
             evaluations: Arc::new(RwLock::new(HashMap::new())),
             metrics_storage,
+            database,
+        };
+
+        // Load existing rules and alerts from database
+        if let Err(e) = manager.load_from_database().await {
+            error!("Failed to load alerts from database: {}", e);
         }
+
+        manager
+    }
+
+    /// Load rules and alerts from database into memory cache
+    async fn load_from_database(&self) -> anyhow::Result<()> {
+        // Load alert rules
+        let rules = self.database.list_alert_rules().await?;
+        let mut rules_cache = self.rules_cache.write().await;
+        for rule in rules {
+            info!(
+                "Loaded alert rule from database: {} ({})",
+                rule.name, rule.id
+            );
+            rules_cache.insert(rule.id.clone(), rule);
+        }
+        drop(rules_cache);
+
+        // Load alerts
+        let alerts = self.database.list_alerts(Some(1000)).await?;
+        let mut alerts_cache = self.alerts_cache.write().await;
+        for alert in alerts {
+            alerts_cache.insert(alert.id.clone(), alert);
+        }
+        info!(
+            "Loaded {} alert rules and {} alerts from database",
+            self.rules_cache.read().await.len(),
+            alerts_cache.len()
+        );
+
+        Ok(())
     }
 
     // Alert Rule Management
@@ -45,18 +86,45 @@ impl AlertManager {
             cooldown_seconds: req.cooldown_seconds,
         };
 
-        let mut rules = self.rules.write().await;
+        // Save to database first
+        if let Err(e) = self.database.create_alert_rule(&rule).await {
+            error!("Failed to save alert rule to database: {}", e);
+        } else {
+            info!("Saved alert rule to database: {} ({})", rule.name, rule.id);
+        }
+
+        // Update in-memory cache
+        let mut rules = self.rules_cache.write().await;
         rules.insert(rule.id.clone(), rule.clone());
         rule
     }
 
     pub async fn get_rule(&self, rule_id: &str) -> Option<AlertRule> {
-        let rules = self.rules.read().await;
-        rules.get(rule_id).cloned()
+        // First check cache
+        let rules = self.rules_cache.read().await;
+        if let Some(rule) = rules.get(rule_id) {
+            return Some(rule.clone());
+        }
+        drop(rules);
+
+        // If not in cache, try database
+        match self.database.get_alert_rule(rule_id).await {
+            Ok(Some(rule)) => {
+                // Update cache
+                let mut rules = self.rules_cache.write().await;
+                rules.insert(rule.id.clone(), rule.clone());
+                Some(rule)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                error!("Failed to get alert rule from database: {}", e);
+                None
+            }
+        }
     }
 
     pub async fn list_rules(&self) -> Vec<AlertRule> {
-        let rules = self.rules.read().await;
+        let rules = self.rules_cache.read().await;
         rules.values().cloned().collect()
     }
 
@@ -65,7 +133,7 @@ impl AlertManager {
         rule_id: &str,
         req: UpdateAlertRuleRequest,
     ) -> Option<AlertRule> {
-        let mut rules = self.rules.write().await;
+        let mut rules = self.rules_cache.write().await;
 
         if let Some(rule) = rules.get_mut(rule_id) {
             if let Some(name) = req.name {
@@ -99,6 +167,15 @@ impl AlertManager {
                 rule.cooldown_seconds = cooldown;
             }
 
+            // Save to database
+            let updated_rule = rule.clone();
+            let db = self.database.clone();
+            tokio::spawn(async move {
+                if let Err(e) = db.update_alert_rule(&updated_rule).await {
+                    error!("Failed to update alert rule in database: {}", e);
+                }
+            });
+
             Some(rule.clone())
         } else {
             None
@@ -106,14 +183,29 @@ impl AlertManager {
     }
 
     pub async fn delete_rule(&self, rule_id: &str) -> bool {
-        let mut rules = self.rules.write().await;
+        // Delete from database first
+        if let Err(e) = self.database.delete_alert_rule(rule_id).await {
+            error!("Failed to delete alert rule from database: {}", e);
+        }
+
+        let mut rules = self.rules_cache.write().await;
         rules.remove(rule_id).is_some()
     }
 
     pub async fn toggle_rule(&self, rule_id: &str) -> Option<AlertRule> {
-        let mut rules = self.rules.write().await;
+        let mut rules = self.rules_cache.write().await;
         if let Some(rule) = rules.get_mut(rule_id) {
             rule.enabled = !rule.enabled;
+
+            // Save to database
+            let updated_rule = rule.clone();
+            let db = self.database.clone();
+            tokio::spawn(async move {
+                if let Err(e) = db.update_alert_rule(&updated_rule).await {
+                    error!("Failed to toggle alert rule in database: {}", e);
+                }
+            });
+
             Some(rule.clone())
         } else {
             None
@@ -122,10 +214,10 @@ impl AlertManager {
 
     // Alert Evaluation
     pub async fn evaluate_alerts(&self) -> Vec<Alert> {
-        let rules = self.rules.read().await;
-        let mut alerts = self.alerts.write().await;
+        let rules = self.rules_cache.read().await;
+        let mut alerts = self.alerts_cache.write().await;
         let mut evaluations = self.evaluations.write().await;
-        let mut triggered_alerts = Vec::new();
+        let mut triggered_alerts: Vec<Alert> = Vec::new();
 
         for rule in rules.values() {
             if !rule.enabled {
@@ -174,6 +266,8 @@ impl AlertManager {
 
                                     if alert.state == AlertState::Pending {
                                         alert.state = AlertState::Firing;
+                                        // Save to database
+                                        self.persist_alert(alert.clone());
                                         triggered_alerts.push(alert.clone());
                                     } else if alert.state == AlertState::Firing {
                                         // Check if we should re-notify based on cooldown
@@ -190,6 +284,8 @@ impl AlertManager {
                                         value,
                                     );
                                     alert.state = AlertState::Firing;
+                                    // Save to database
+                                    self.persist_alert(alert.clone());
                                     alerts.insert(alert_id, alert.clone());
                                     triggered_alerts.push(alert);
                                 }
@@ -210,6 +306,8 @@ impl AlertManager {
                             let alert_id = format!("{}:{}", rule.id, agent.id);
                             let alert =
                                 Alert::new(rule, agent.id.clone(), agent.name.clone(), value);
+                            // Save to database
+                            self.persist_alert(alert.clone());
                             alerts.insert(alert_id, alert);
                         }
                     } else {
@@ -222,6 +320,8 @@ impl AlertManager {
                             if alert.is_active() {
                                 alert.state = AlertState::Resolved;
                                 alert.resolved_at = Some(Utc::now());
+                                // Save to database
+                                self.persist_alert(alert.clone());
                             }
                         }
                     }
@@ -230,6 +330,16 @@ impl AlertManager {
         }
 
         triggered_alerts
+    }
+
+    /// Persist alert to database in background
+    fn persist_alert(&self, alert: Alert) {
+        let db = self.database.clone();
+        tokio::spawn(async move {
+            if let Err(e) = db.upsert_alert(&alert).await {
+                error!("Failed to persist alert to database: {}", e);
+            }
+        });
     }
 
     fn evaluate_condition(&self, rule: &AlertRule, value: f64, agent_id: &str) -> bool {
@@ -253,20 +363,38 @@ impl AlertManager {
     // Alert Management
     #[allow(dead_code)]
     pub async fn get_active_alerts(&self) -> Vec<Alert> {
-        let alerts = self.alerts.read().await;
+        let alerts = self.alerts_cache.read().await;
         alerts.values().filter(|a| a.is_active()).cloned().collect()
     }
 
     pub async fn get_all_alerts(&self) -> Vec<Alert> {
-        let alerts = self.alerts.read().await;
+        let alerts = self.alerts_cache.read().await;
         let mut all: Vec<Alert> = alerts.values().cloned().collect();
         all.sort_by(|a, b| b.triggered_at.cmp(&a.triggered_at));
         all
     }
 
     pub async fn get_alert(&self, alert_id: &str) -> Option<Alert> {
-        let alerts = self.alerts.read().await;
-        alerts.get(alert_id).cloned()
+        // First check cache
+        let alerts = self.alerts_cache.read().await;
+        if let Some(alert) = alerts.get(alert_id) {
+            return Some(alert.clone());
+        }
+        drop(alerts);
+
+        // Try database
+        match self.database.get_alert(alert_id).await {
+            Ok(Some(alert)) => {
+                let mut alerts = self.alerts_cache.write().await;
+                alerts.insert(alert.id.clone(), alert.clone());
+                Some(alert)
+            }
+            Ok(None) => None,
+            Err(e) => {
+                error!("Failed to get alert from database: {}", e);
+                None
+            }
+        }
     }
 
     pub async fn acknowledge_alert(
@@ -274,12 +402,22 @@ impl AlertManager {
         alert_id: &str,
         acknowledged_by: String,
     ) -> Option<Alert> {
-        let mut alerts = self.alerts.write().await;
+        let mut alerts = self.alerts_cache.write().await;
 
         if let Some(alert) = alerts.get_mut(alert_id) {
             alert.acknowledged = true;
             alert.acknowledged_at = Some(Utc::now());
-            alert.acknowledged_by = Some(acknowledged_by);
+            alert.acknowledged_by = Some(acknowledged_by.clone());
+
+            // Save to database
+            let db = self.database.clone();
+            let aid = alert_id.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = db.acknowledge_alert_db(&aid, &acknowledged_by).await {
+                    error!("Failed to acknowledge alert in database: {}", e);
+                }
+            });
+
             Some(alert.clone())
         } else {
             None
@@ -288,15 +426,17 @@ impl AlertManager {
 
     #[allow(dead_code)]
     pub async fn mark_notified(&self, alert_id: &str) {
-        let mut alerts = self.alerts.write().await;
+        let mut alerts = self.alerts_cache.write().await;
         if let Some(alert) = alerts.get_mut(alert_id) {
             alert.last_notification_at = Some(Utc::now());
+            // Persist the update
+            self.persist_alert(alert.clone());
         }
     }
 
     pub async fn cleanup_old_alerts(&self, max_age_hours: i64) {
         let cutoff = Utc::now() - chrono::Duration::hours(max_age_hours);
-        let mut alerts = self.alerts.write().await;
+        let mut alerts = self.alerts_cache.write().await;
 
         alerts.retain(|_, alert| {
             if alert.state == AlertState::Resolved {
@@ -309,5 +449,7 @@ impl AlertManager {
                 true
             }
         });
+
+        // Database cleanup is handled separately by Database::cleanup_old_alerts
     }
 }

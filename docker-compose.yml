@@ -37,6 +37,7 @@ services:
       - SERVER_PORT=8080
       - DATABASE_URL=postgresql://monitoring_user:monitoring_password@postgres:5432/monitoring
       - AUTH_ENABLED=true
+      - AUTH_REQUIRE_API_KEY=true
       - RUST_LOG=info
     networks:
       - monitoring

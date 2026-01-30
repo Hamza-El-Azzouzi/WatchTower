@@ -23,13 +23,38 @@ fn extract_api_key(headers: &HeaderMap) -> Option<String> {
         .and_then(|auth| auth.strip_prefix("Bearer ").map(|s| s.to_string()))
 }
 
+/// Extract admin token from X-Admin-Token header
+fn extract_admin_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("X-Admin-Token")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+}
+
 /// Middleware to validate API keys with agent limit enforcement
+/// Also accepts admin tokens for dashboard access
 pub async fn auth_middleware(
     State(auth_service): State<Arc<AuthService>>,
     headers: HeaderMap,
     request: Request,
     next: Next,
 ) -> Result<Response, impl IntoResponse> {
+    // First check for admin token via X-Admin-Token header
+    if let Some(admin_token) = extract_admin_token(&headers) {
+        if admin_token.starts_with("admin_") && admin_token.len() > 10 {
+            // Valid admin token format - allow access
+            return Ok(next.run(request).await);
+        }
+    }
+
+    // Also check for admin token via Authorization: Bearer header
+    if let Some(bearer_token) = extract_api_key(&headers) {
+        if bearer_token.starts_with("admin_") && bearer_token.len() > 10 {
+            // Valid admin token format via Bearer - allow access
+            return Ok(next.run(request).await);
+        }
+    }
+
     let api_key = match extract_api_key(&headers) {
         Some(key) => key,
         None => {

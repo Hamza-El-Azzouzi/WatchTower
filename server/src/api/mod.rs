@@ -698,11 +698,16 @@ pub async fn get_database_stats(
 // API Key Management Endpoints
 // ============================================================================
 
-/// POST /api/v1/auth/keys - Create a new API key
+/// POST /api/v1/auth/keys - Create a new API key (admin only)
 pub async fn create_api_key(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Validate admin token
+    let _token = extract_admin_token(&headers)
+        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+
     let auth_service = state
         .auth_service
         .as_ref()
@@ -723,10 +728,53 @@ pub async fn create_api_key(
     }
 }
 
-/// GET /api/v1/auth/keys - List all API keys
+/// GET /api/v1/auth/validate - Validate an API key (public endpoint for login)
+pub async fn validate_api_key(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ApiError> {
+    let auth_service = state
+        .auth_service
+        .as_ref()
+        .ok_or_else(|| ApiError::BadRequest("Authentication is not enabled".to_string()))?;
+
+    // Extract API key from headers
+    let api_key = headers
+        .get("X-API-Key")
+        .and_then(|h| h.to_str().ok())
+        .ok_or_else(|| ApiError::BadRequest("Missing API key".to_string()))?;
+
+    // Validate the key
+    match auth_service.validate_api_key(api_key).await {
+        Ok(Some(_key_info)) => {
+            info!("API key validated successfully");
+            Ok(Json(serde_json::json!({
+                "valid": true,
+                "message": "API key is valid"
+            })))
+        }
+        Ok(None) => {
+            info!("Invalid API key attempted");
+            Err(ApiError::BadRequest(
+                "Invalid or expired API key".to_string(),
+            ))
+        }
+        Err(e) => {
+            error!("API key validation error: {}", e);
+            Err(ApiError::InternalError(format!("Validation failed: {}", e)))
+        }
+    }
+}
+
+/// GET /api/v1/auth/keys - List all API keys (admin only)
 pub async fn list_api_keys(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Validate admin token
+    let _token = extract_admin_token(&headers)
+        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+
     let auth_service = state
         .auth_service
         .as_ref()
@@ -754,11 +802,16 @@ pub async fn list_api_keys(
     }
 }
 
-/// DELETE /api/v1/auth/keys/:key_id - Revoke an API key
+/// DELETE /api/v1/auth/keys/:key_id - Revoke an API key (admin only)
 pub async fn revoke_api_key(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(key_id): Path<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Validate admin token
+    let _token = extract_admin_token(&headers)
+        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+
     let auth_service = state
         .auth_service
         .as_ref()
@@ -1043,4 +1096,147 @@ pub struct CreateAdminRequest {
     pub password: String,
     pub email: Option<String>,
     pub full_name: Option<String>,
+}
+
+// ============ Agent Request API ============
+
+/// Request for agent quota
+#[derive(Debug, Deserialize)]
+pub struct AgentRequestPayload {
+    pub company_name: String,
+    pub contact_name: String,
+    pub email: String,
+    pub phone: Option<String>,
+    pub agents_requested: i32,
+    pub use_case: String,
+    pub message: Option<String>,
+}
+
+/// Response for agent request submission
+#[derive(Debug, Serialize)]
+pub struct AgentRequestResponse {
+    pub id: i64,
+    pub message: String,
+}
+
+/// POST /api/v1/requests/agents - Submit an agent quota request (public endpoint)
+pub async fn submit_agent_request(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<AgentRequestPayload>,
+) -> Result<impl IntoResponse, ApiError> {
+    info!(
+        "Received agent request from '{}' ({}) for {} agents",
+        payload.company_name, payload.email, payload.agents_requested
+    );
+
+    let database = state
+        .database
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Database not available".to_string()))?;
+
+    match database.create_agent_request(&payload).await {
+        Ok(id) => {
+            info!(
+                "Created agent request #{} for {} ({})",
+                id, payload.company_name, payload.email
+            );
+            Ok(Json(AgentRequestResponse {
+                id,
+                message: "Request submitted successfully. We will contact you shortly.".to_string(),
+            }))
+        }
+        Err(e) => {
+            error!("Failed to create agent request: {}", e);
+            Err(ApiError::InternalError(
+                "Failed to submit request. Please try again.".to_string(),
+            ))
+        }
+    }
+}
+
+/// GET /api/v1/requests/agents - List all agent requests (admin only)
+pub async fn list_agent_requests(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Verify admin token
+    if extract_admin_token(&headers).is_none() {
+        return Err(ApiError::BadRequest("Admin access required".to_string()));
+    }
+
+    let database = state
+        .database
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Database not available".to_string()))?;
+
+    let status_filter = params.get("status").map(|s| s.as_str());
+
+    match database.list_agent_requests(status_filter).await {
+        Ok(requests) => Ok(Json(serde_json::json!({
+            "requests": requests,
+            "total": requests.len()
+        }))),
+        Err(e) => {
+            error!("Failed to list agent requests: {}", e);
+            Err(ApiError::InternalError(
+                "Failed to fetch requests".to_string(),
+            ))
+        }
+    }
+}
+
+/// PUT /api/v1/requests/agents/:id/status - Update request status (admin only)
+pub async fn update_agent_request_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(request_id): Path<i64>,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<impl IntoResponse, ApiError> {
+    // Verify admin token
+    if extract_admin_token(&headers).is_none() {
+        return Err(ApiError::BadRequest("Admin access required".to_string()));
+    }
+
+    let database = state
+        .database
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Database not available".to_string()))?;
+
+    let status = payload
+        .get("status")
+        .and_then(|s| s.as_str())
+        .ok_or_else(|| ApiError::BadRequest("Status is required".to_string()))?;
+
+    let notes = payload.get("notes").and_then(|n| n.as_str());
+    let reviewed_by = payload.get("reviewed_by").and_then(|r| r.as_str());
+
+    match database
+        .update_agent_request_status(request_id, status, notes, reviewed_by)
+        .await
+    {
+        Ok(updated) => {
+            if updated {
+                info!(
+                    "Updated agent request #{} to status '{}'",
+                    request_id, status
+                );
+                Ok(Json(serde_json::json!({
+                    "success": true,
+                    "message": format!("Request #{} updated to {}", request_id, status)
+                })))
+            } else {
+                Err(ApiError::BadRequest(format!(
+                    "Request #{} not found",
+                    request_id
+                )))
+            }
+        }
+        Err(e) => {
+            error!("Failed to update agent request: {}", e);
+            Err(ApiError::InternalError(
+                "Failed to update request".to_string(),
+            ))
+        }
+    }
 }

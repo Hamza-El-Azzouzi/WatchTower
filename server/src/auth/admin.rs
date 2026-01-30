@@ -132,12 +132,15 @@ pub fn generate_jwt_token(username: &str, _password: &str) -> String {
         exp: expires_at.timestamp() as usize,
     };
 
-    encode(
+    // Prefix with admin_ to make it recognizable as an admin token
+    let jwt = encode(
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(JWT_SECRET.as_ref()),
     )
-    .unwrap_or_default()
+    .unwrap_or_default();
+
+    format!("admin_{}", jwt)
 }
 
 // Middleware to verify admin JWT token
