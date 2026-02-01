@@ -159,10 +159,10 @@ export function AlertDetailModal({ alert, onClose, onAcknowledge }: AlertDetailM
             <div className="bg-background rounded-lg p-4 border border-border">
               <div className="text-sm text-muted-foreground mb-1">Threshold</div>
               <div className="text-2xl font-bold text-foreground">
-                {alert.condition === 'greaterthan' && '> '}
-                {alert.condition === 'lessthan' && '< '}
+                {alert.condition === 'greater_than' && '> '}
+                {alert.condition === 'less_than' && '< '}
                 {alert.condition === 'equals' && '= '}
-                {alert.condition === 'notequals' && '≠ '}
+                {alert.condition === 'not_equals' && '≠ '}
                 {alert.threshold}
                 {alert.metric.includes('usage') && '%'}
               </div>

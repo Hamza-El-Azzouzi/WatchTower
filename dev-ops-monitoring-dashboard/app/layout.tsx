@@ -5,6 +5,7 @@ import { Analytics } from '@vercel/analytics/next'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { AuthProvider } from '@/components/AuthProvider'
 import { ConditionalLayout } from '@/components/ConditionalLayout'
+import { MetricsProvider } from '@/contexts/MetricsContext'
 import './globals.css'
 
 const _geist = Geist({ subsets: ["latin"] });
@@ -42,9 +43,11 @@ export default function RootLayout({
       <body className={`font-sans antialiased bg-background text-foreground`}>
         <ErrorBoundary>
           <AuthProvider>
-            <ConditionalLayout>
-              {children}
-            </ConditionalLayout>
+            <MetricsProvider>
+              <ConditionalLayout>
+                {children}
+              </ConditionalLayout>
+            </MetricsProvider>
           </AuthProvider>
         </ErrorBoundary>
         <Analytics />

@@ -78,7 +78,7 @@ export default function AdminDashboard() {
       icon: Activity,
       color: 'text-green-500',
       bgColor: 'bg-green-500/10',
-      link: '/'
+      link: '/admin/agents'
     },
     {
       title: 'Server Agents',
@@ -86,7 +86,7 @@ export default function AdminDashboard() {
       icon: Server,
       color: 'text-purple-500',
       bgColor: 'bg-purple-500/10',
-      link: '/'
+      link: '/admin/agents?type=server'
     },
     {
       title: 'Database Agents',
@@ -94,7 +94,7 @@ export default function AdminDashboard() {
       icon: Database,
       color: 'text-cyan-500',
       bgColor: 'bg-cyan-500/10',
-      link: '/databases'
+      link: '/admin/agents?type=database'
     },
     {
       title: 'Active Alerts',
@@ -102,7 +102,7 @@ export default function AdminDashboard() {
       icon: AlertTriangle,
       color: 'text-red-500',
       bgColor: 'bg-red-500/10',
-      link: '/alerts'
+      link: '/admin/alerts'
     },
     {
       title: 'Pending Requests',

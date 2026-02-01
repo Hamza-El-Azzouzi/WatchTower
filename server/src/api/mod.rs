@@ -195,10 +195,37 @@ pub async fn query_metrics(
         params.agent_id, params.metric
     );
 
+    // First try in-memory store for recent data
     let mut data_points =
         state
             .store
             .query(&params.agent_id, &params.metric, params.from, params.to);
+
+    // If in-memory store doesn't have enough data and database is available, 
+    // fallback to database for historical data
+    let requested_limit = params.limit.unwrap_or(100);
+    if data_points.len() < requested_limit {
+        if let Some(db) = &state.database {
+            match db.query_metrics(
+                &params.agent_id,
+                &params.metric,
+                params.from,
+                params.to,
+                Some(requested_limit),
+            ).await {
+                Ok(db_points) => {
+                    // Use database results if we got more data
+                    if db_points.len() > data_points.len() {
+                        data_points = db_points;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to query metrics from database: {}", e);
+                    // Continue with in-memory data
+                }
+            }
+        }
+    }
 
     // Apply limit if specified
     if let Some(limit) = params.limit {
@@ -248,13 +275,34 @@ pub async fn get_latest_metrics(
     let metric_names = state.store.get_agent_metrics(&params.agent_id);
     let mut metrics = Vec::new();
 
-    for metric_name in metric_names {
-        if let Some(data_point) = state.store.get_latest(&params.agent_id, &metric_name) {
+    // Try in-memory store first
+    for metric_name in &metric_names {
+        if let Some(data_point) = state.store.get_latest(&params.agent_id, metric_name) {
             metrics.push(LatestMetric {
-                name: metric_name,
+                name: metric_name.clone(),
                 value: data_point.value,
                 timestamp: data_point.timestamp,
             });
+        }
+    }
+
+    // If in-memory is empty, fallback to database
+    if metrics.is_empty() {
+        if let Some(db) = &state.database {
+            match db.get_latest_metrics(&params.agent_id).await {
+                Ok(db_metrics) => {
+                    for (name, value, timestamp) in db_metrics {
+                        metrics.push(LatestMetric {
+                            name,
+                            value,
+                            timestamp,
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to get latest metrics from database: {}", e);
+                }
+            }
         }
     }
 

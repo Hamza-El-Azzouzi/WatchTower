@@ -27,7 +27,7 @@ export default function NewAlertRulePage() {
     name: '',
     description: '',
     metric: 'cpu_usage',
-    condition: 'greaterthan' as const,
+    condition: 'greater_than' as const,
     threshold: 80,
     duration_seconds: 300,
     severity: 'warning' as 'info' | 'warning' | 'critical',
@@ -137,10 +137,10 @@ export default function NewAlertRulePage() {
                 onChange={(e) => setFormData({ ...formData, condition: e.target.value as any })}
                 className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg focus:outline-none focus:border-primary"
               >
-                <option value="greaterthan">Greater Than (&gt;)</option>
-                <option value="lessthan">Less Than (&lt;)</option>
+                <option value="greater_than">Greater Than (&gt;)</option>
+                <option value="less_than">Less Than (&lt;)</option>
                 <option value="equals">Equals (=)</option>
-                <option value="notequals">Not Equals (≠)</option>
+                <option value="not_equals">Not Equals (≠)</option>
               </select>
             </div>
           </div>

@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import PageHeader from '@/components/PageHeader';
-import { Zap, TrendingUp, TrendingDown, Activity, Server, AlertTriangle } from 'lucide-react';
+import { Zap, TrendingUp, TrendingDown, Activity, Server, AlertTriangle, Wifi } from 'lucide-react';
 import Link from 'next/link';
+import { useMetricsWebSocket } from '@/hooks/useWebSocket';
+import { WsMetricMessage } from '@/lib/websocket';
 
 interface Agent {
   agent_id: string;
@@ -73,7 +75,29 @@ export default function PerformancePage() {
   const [metricsMap, setMetricsMap] = useState<Map<string, ServerMetrics>>(new Map());
   const [performances, setPerformances] = useState<AgentPerformance[]>([]);
   const [loading, setLoading] = useState(true);
-  const [autoRefresh, setAutoRefresh] = useState(true);
+
+  // WebSocket handler for real-time performance updates
+  const handleMetricUpdate = useCallback((metricMessage: WsMetricMessage) => {
+    const agentId = metricMessage.Metric.agent_id;
+    const metricName = metricMessage.Metric.metric_name;
+    const value = metricMessage.Metric.value;
+
+    setPerformances(prev => prev.map(perf => {
+      if (perf.agent_id !== agentId) return perf;
+
+      const updated = { ...perf };
+      if (metricName === 'cpu_usage') updated.cpu = value;
+      else if (metricName === 'memory_usage') updated.memory = value;
+      else if (metricName === 'disk_usage') updated.disk = value;
+      else return perf;
+
+      updated.score = calculatePerformanceScore(updated.cpu, updated.memory, updated.disk);
+      updated.status = getStatusFromScore(updated.score);
+      return updated;
+    }));
+  }, []);
+
+  const { isConnected: wsConnected } = useMetricsWebSocket(handleMetricUpdate);
 
   const fetchData = async () => {
     try {
@@ -130,11 +154,7 @@ export default function PerformancePage() {
     fetchData();
   }, []);
 
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = setInterval(fetchData, 10000); // Refresh every 10 seconds
-    return () => clearInterval(interval);
-  }, [autoRefresh]);
+  // No polling - WebSocket updates metrics in real-time across the app
 
   // Calculate fleet-wide statistics
   const fleetStats = {
@@ -175,15 +195,18 @@ export default function PerformancePage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
-              <input
-                type="checkbox"
-                checked={autoRefresh}
-                onChange={(e) => setAutoRefresh(e.target.checked)}
-                className="rounded border-border bg-background"
-              />
-              Auto-refresh (10s)
-            </label>
+            {wsConnected ? (
+              <span className="flex items-center gap-2 px-3 py-1.5 bg-green-600/20 border border-green-600/30 rounded-lg text-green-400 text-sm">
+                <Wifi className="w-4 h-4" />
+                <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                Live
+              </span>
+            ) : (
+              <span className="flex items-center gap-2 px-3 py-1.5 bg-yellow-600/20 border border-yellow-600/30 rounded-lg text-yellow-400 text-sm">
+                <Wifi className="w-4 h-4" />
+                Connecting...
+              </span>
+            )}
             <button
               onClick={fetchData}
               disabled={loading}

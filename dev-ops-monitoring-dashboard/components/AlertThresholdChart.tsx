@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import {
   ComposedChart,
   Area,
@@ -18,6 +18,8 @@ import { getHistoricalMetrics } from '@/lib/api';
 import { formatChartTime } from '@/lib/metrics-utils';
 import { DataPoint } from '@/types';
 import { AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { useMetricsWebSocket } from '@/hooks/useWebSocket';
+import { WsMetricMessage } from '@/lib/websocket';
 
 interface AlertThresholdChartProps {
   agentId: string;
@@ -40,16 +42,48 @@ export default function AlertThresholdChart({
   const [loading, setLoading] = useState(true);
   const [currentValue, setCurrentValue] = useState<number>(0);
   const [alertStatus, setAlertStatus] = useState<'ok' | 'warning' | 'critical'>('ok');
+  const lastUpdateRef = useRef<number>(0);
+  const maxDataPoints = 50;
+
+  // WebSocket handler for real-time updates
+  const handleMetricUpdate = useCallback((metricMessage: WsMetricMessage) => {
+    if (metricMessage.agent_id !== agentId) return;
+    if (metricMessage.metric_name !== metric) return;
+
+    // Throttle updates
+    const now = Date.now();
+    if (now - lastUpdateRef.current < 500) return;
+    lastUpdateRef.current = now;
+
+    const newValue = Number(metricMessage.value.toFixed(2));
+    const timestamp = formatChartTime(metricMessage.timestamp);
+
+    // Update current value and status
+    setCurrentValue(newValue);
+    if (newValue >= criticalThreshold) {
+      setAlertStatus('critical');
+    } else if (newValue >= warningThreshold) {
+      setAlertStatus('warning');
+    } else {
+      setAlertStatus('ok');
+    }
+
+    // Append to chart data
+    setData(prev => {
+      const newPoint = { timestamp, value: newValue };
+      const updated = [...prev, newPoint];
+      return updated.slice(-maxDataPoints);
+    });
+  }, [agentId, metric, criticalThreshold, warningThreshold]);
+
+  useMetricsWebSocket(handleMetricUpdate);
 
   useEffect(() => {
-    let isInitialLoad = true;
+    let isMounted = true;
 
     const fetchData = async () => {
       try {
-        // Only show loading on initial mount
-        if (isInitialLoad) {
-          setLoading(true);
-        }
+        setLoading(true);
         
         const result = await getHistoricalMetrics(agentId, metric, limit);
         
@@ -58,34 +92,35 @@ export default function AlertThresholdChart({
           value: Number(point.value.toFixed(2)),
         }));
 
-        setData(chartData);
+        if (isMounted) {
+          setData(chartData);
 
-        // Get current value and alert status
-        if (chartData.length > 0) {
-          const latest = chartData[chartData.length - 1].value;
-          setCurrentValue(latest);
-          
-          if (latest >= criticalThreshold) {
-            setAlertStatus('critical');
-          } else if (latest >= warningThreshold) {
-            setAlertStatus('warning');
-          } else {
-            setAlertStatus('ok');
+          // Get current value and alert status
+          if (chartData.length > 0) {
+            const latest = chartData[chartData.length - 1].value;
+            setCurrentValue(latest);
+            
+            if (latest >= criticalThreshold) {
+              setAlertStatus('critical');
+            } else if (latest >= warningThreshold) {
+              setAlertStatus('warning');
+            } else {
+              setAlertStatus('ok');
+            }
           }
         }
       } catch (error) {
         console.error(`Error fetching ${metric}:`, error);
       } finally {
-        if (isInitialLoad) {
+        if (isMounted) {
           setLoading(false);
-          isInitialLoad = false;
         }
       }
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 10000);
-    return () => clearInterval(interval);
+    // No polling - WebSocket handles real-time updates
+    return () => { isMounted = false; };
   }, [agentId, metric, criticalThreshold, warningThreshold, limit]);
 
   const getStatusColor = () => {

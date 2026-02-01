@@ -3,8 +3,10 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { Activity, Home, Database, Zap, Settings, Bell, HelpCircle, Shield, Key, LogOut, Users, Lock, FileText } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { getAlerts } from '@/lib/alerts-api'
+import { useAlertsWebSocket } from '@/hooks/useWebSocket'
+import { WsAlertMessage } from '@/lib/websocket'
 
 export function Sidebar() {
   const pathname = usePathname()
@@ -14,12 +16,24 @@ export function Sidebar() {
   
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + '/')
   
+  // WebSocket handler for real-time alert updates
+  const handleAlertUpdate = useCallback((alertMessage: WsAlertMessage) => {
+    // Update alert count based on WebSocket messages
+    if (alertMessage.Alert && (alertMessage.Alert.state === 'firing' || alertMessage.Alert.state === 'pending')) {
+      setAlertCount(prev => prev + 1)
+    } else if (alertMessage.Alert && alertMessage.Alert.state === 'resolved') {
+      setAlertCount(prev => Math.max(0, prev - 1))
+    }
+  }, [])
+
+  useAlertsWebSocket(handleAlertUpdate)
+
   useEffect(() => {
     // Get user type from localStorage
     const type = localStorage.getItem('user_type')
     setUserType(type)
     
-    // Only fetch alerts for regular users
+    // Only fetch initial alerts for regular users (WebSocket handles updates)
     if (type !== 'admin') {
       const fetchAlertCount = async () => {
         try {
@@ -31,10 +45,7 @@ export function Sidebar() {
         }
       }
       
-      fetchAlertCount()
-      const interval = setInterval(fetchAlertCount, 10000) // Update every 10 seconds
-      
-      return () => clearInterval(interval)
+      fetchAlertCount() // Initial load only, no polling
     }
   }, [])
   
@@ -51,6 +62,8 @@ export function Sidebar() {
   // Admin items for admin users
   const adminItems = [
     { icon: Shield, label: 'Admin Dashboard', href: '/admin', id: 'admin-overview' },
+    { icon: Activity, label: 'Agents', href: '/admin/agents', id: 'admin-agents' },
+    { icon: Bell, label: 'Alerts', href: '/admin/alerts', id: 'admin-alerts' },
     { icon: Key, label: 'API Keys', href: '/admin/api-keys', id: 'api-keys' },
     { icon: Users, label: 'Manage Admins', href: '/admin/users', id: 'manage-admins' },
     { icon: Lock, label: 'Change Password', href: '/admin/change-password', id: 'change-password' },

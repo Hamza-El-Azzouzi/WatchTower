@@ -7,7 +7,7 @@ export interface AlertRule {
   name: string;
   description?: string;
   metric: string;
-  condition: 'greaterthan' | 'lessthan' | 'equals' | 'notequals';
+  condition: 'greater_than' | 'less_than' | 'equals' | 'not_equals';
   threshold: number;
   threshold_percent?: number;
   duration_seconds: number;
@@ -29,7 +29,7 @@ export interface Alert {
   metric: string;
   current_value: number;
   threshold: number;
-  condition: 'greaterthan' | 'lessthan' | 'equals' | 'notequals';
+  condition: 'greater_than' | 'less_than' | 'equals' | 'not_equals';
   severity: 'info' | 'warning' | 'critical';
   message: string;
   triggered_at: string;

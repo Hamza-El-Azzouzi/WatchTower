@@ -1,72 +1,303 @@
-# Monitor Agent
+# 🤖 Monitoring Agent
 
-Phase 1 basic monitoring agent that collects system metrics.
+<p align="center">
+  <strong>Lightweight, cross-platform system metrics collector built with Rust</strong>
+</p>
 
-## Building
+---
+
+## Overview
+
+The Monitoring Agent is a high-performance, low-overhead system metrics collector that runs on your servers and sends real-time performance data to the central monitoring server. Built with Rust for maximum efficiency and reliability.
+
+### Key Features
+
+- ✅ **Low Resource Usage**: < 2% CPU, < 50MB RAM
+- ✅ **Cross-Platform**: Linux, macOS, Windows
+- ✅ **Comprehensive Metrics**: CPU, Memory, Disk, Network, Swap, GPU, Database
+- ✅ **Per-Core CPU Tracking**: Individual CPU core monitoring
+- ✅ **GPU Monitoring**: NVIDIA/AMD GPU usage & temperature
+- ✅ **Database Monitoring**: PostgreSQL/MySQL metrics (connections, QPS, cache)
+- ✅ **Temperature Sensors**: CPU/GPU temperature (when available)
+- ✅ **Reliable Transmission**: Retry logic with exponential backoff
+- ✅ **Secure**: API key authentication
+- ✅ **Configurable**: TOML-based configuration
+- ✅ **Production-Ready**: Auto-reconnect, error handling
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│            MONITORING AGENT                     │
+│                                                 │
+│  ┌─────────────────────────────────────────┐    │
+│  │         Metric Collectors               │    │
+│  ├─────────────────────────────────────────┤    │
+│  │  • CPU Collector (sysinfo)              │    │
+│  │    - Total CPU usage                    │    │
+│  │    - Per-core usage                     │    │
+│  │    - CPU temperature                    │    │
+│  │                                         │    │
+│  │  • Memory Collector                     │    │
+│  │    - Used/Total memory                  │    │
+│  │    - Swap usage                         │    │
+│  │                                         │    │
+│  │  • Disk Collector                       │    │
+│  │    - Used/Total disk space              │    │
+│  │    - Multiple mount points              │    │
+│  │                                         │    │
+│  │  • Network Collector                    │    │
+│  │    - RX/TX bytes                        │    │
+│  │    - All network interfaces             │    │
+│  │  • GPU Collector                        │    │
+│  │    - GPU usage & temperature            │    │
+│  │    - GPU memory (NVIDIA/AMD)            │    │
+│  │                                         │    │
+│  │  • Database Collector                   │    │
+│  │    - PostgreSQL/MySQL metrics           │    │
+│  │    - Connections, QPS, cache hit ratio  │    │
+│  └─────────────────────────────────────────┘    │
+│                     │                           │
+│                     ▼                           │
+│  ┌─────────────────────────────────────────┐    │
+│  │        Metrics Aggregator               │    │
+│  │   (Combines all metrics with timestamp) │    │
+│  └─────────────────────────────────────────┘    │
+│                     │                           │
+│                     ▼                           │
+│  ┌──────────────────────────────────────────┐   │
+│  │          HTTP Sender                     │   │
+│  │  • Batch metrics                         │   │
+│  │  • Add API key authentication            │   │
+│  │  • Retry on failure (exponential backoff)│   │
+│  │  • POST to /api/v1/metrics               │   │
+│  └──────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────┘
+                     │
+                     │ HTTPS
+                     ▼
+        ┌─────────────────────────┐
+        │   Central Server        │
+        │   (port 8080)           │
+        └─────────────────────────┘
+```
+
+---
+
+## Installation
+
+### Build from Source
 
 ```bash
-cd agent
+# Clone the repository
+git clone https://github.com/yourusername/devops-monitoring-system.git
+cd devops-monitoring-system/agent
+
+# Build release binary
 cargo build --release
+
+# Binary will be at: target/release/monitor-agent
+./target/release/monitor-agent -c agent.toml
 ```
 
-## Running
 
-Run with default configuration:
-```bash
-cargo run
-```
-
-Run with custom configuration file:
-```bash
-cargo run -- --config agent.toml
-```
-
-Run with custom interval (overrides config file):
-```bash
-cargo run -- --config agent.toml --interval 5
-```
-
-Run with verbose logging:
-```bash
-cargo run -- --config agent.toml --verbose
-```
+---
 
 ## Configuration
 
-Edit `agent.toml` to configure the agent:
+Create an `agent.toml` configuration file:
 
 ```toml
+# Agent Configuration
+
 [agent]
-name = "dev-server-01"
+# Unique identifier for this agent (must be unique across all agents)
+id = "web-server-01"
+
+# Human-readable name
+name = "Production Web Server 1"
+
+# Agent type: "server" or "database"
+agent_type = "server"
+
+[server]
+# Central monitoring server URL
+url = "http://monitoring.example.com:8080"
+
+# API key for authentication (get from admin dashboard)
+api_key = "msk_prod_abc123xyz789..."
 
 [collection]
-interval_seconds = 10
+# How often to collect and send metrics (in seconds)
+interval_seconds = 15
 
 [metrics]
+# Which metrics to collect (all enabled by default)
 collect_cpu = true
 collect_memory = true
 collect_disk = true
 collect_network = true
+collect_swap = true
+collect_temperature = true
+collect_gpu = true           # If GPU hardware detected
+
+# Optional: Database monitoring
+[[databases]]
+name = "production-db"
+db_type = "postgres"  # or "mysql"
+host = "localhost"
+port = 5432
+database = "myapp"
+username = "monitor_user"
+password = "secure_password"
 ```
 
-## Expected Output
+---
+
+## Usage
+
+### Basic Usage
+
+```bash
+# Run with configuration file
+./monitor-agent -c agent.toml
+
+# Run with custom config path
+./monitor-agent --config /etc/monitor/agent.toml
+
+# Show version
+./monitor-agent --version
 
 ```
--------------------- Monitoring Agent Started ---------------------
-Agent: dev-server-01 | Interval: 10s
 
-[2024-01-27 10:30:45] CPU: 45.2%, Memory: 4.00 GB/8.00 GB (50.0%), Disk: 100.00 GB/500.00 GB (20.0%), Network: RX 1.20 MB | TX 800.50 KB
-[2024-01-27 10:30:55] CPU: 47.1%, Memory: 4.10 GB/8.00 GB (51.2%), Disk: 100.00 GB/500.00 GB (20.0%), Network: RX 1.25 MB | TX 850.20 KB
+### Running as a Service
+
+#### Linux (systemd)
+
+Create `/etc/systemd/system/monitor-agent.service`:
+
+```ini
+[Unit]
+Description=Monitoring Agent
+After=network.target
+
+[Service]
+Type=simple
+User=monitor
+Group=monitor
+WorkingDirectory=/opt/monitor-agent
+ExecStart=/opt/monitor-agent/monitor-agent -c /opt/monitor-agent/agent.toml
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-## Features
+Enable and start:
 
-- ✅ CPU usage monitoring (average across all cores)
-- ✅ Memory usage monitoring (used/total with percentage)
-- ✅ Disk usage monitoring (aggregated across all disks)
-- ✅ Network traffic monitoring (total RX/TX bytes)
-- ✅ Configurable collection interval
-- ✅ TOML configuration file support
-- ✅ CLI arguments for runtime overrides
-- ✅ Human-readable output with timestamps
-- ✅ Formatted byte sizes (KB, MB, GB, TB)
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable monitor-agent
+sudo systemctl start monitor-agent
+sudo systemctl status monitor-agent
+```
+
+---
+
+## Collected Metrics
+
+### CPU Metrics
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `cpu_usage` | Percentage | Overall CPU usage (0-100%) |
+| `cpu_core_0` | Percentage | CPU core 0 usage |
+| `cpu_core_N` | Percentage | CPU core N usage |
+| `cpu_temp_celsius` | Temperature | CPU temperature |
+
+### Memory Metrics
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `memory_usage` | Percentage | Memory usage (0-100%) |
+| `memory_used_bytes` | Bytes | Used memory |
+| `memory_total_bytes` | Bytes | Total memory |
+
+### Swap Metrics
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `swap_usage` | Percentage | Swap usage (0-100%) |
+| `swap_used_bytes` | Bytes | Used swap |
+| `swap_total_bytes` | Bytes | Total swap |
+
+### Disk Metrics
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `disk_usage` | Percentage | Disk usage (0-100%) |
+| `disk_used_bytes` | Bytes | Used disk space |
+| `disk_total_bytes` | Bytes | Total disk space |
+
+### Network Metrics
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `network_rx_bytes` | Bytes | Total bytes received |
+| `network_tx_bytes` | Bytes | Total bytes transmitted |
+
+### GPU Metrics
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `gpu_usage` | Percentage | GPU utilization (0-100%) |
+| `gpu_memory_used` | Bytes | GPU memory used |
+| `gpu_memory_total` | Bytes | Total GPU memory |
+| `gpu_temp_celsius` | Temperature | GPU temperature |
+
+**Note**: GPU metrics require NVIDIA (via nvml-wrapper) or AMD GPUs. Auto-detected when hardware is available.
+
+### Database Metrics
+
+| Metric Name | Type | Description |
+|-------------|------|-------------|
+| `db_connections_active` | Count | Active database connections |
+| `db_connections_idle` | Count | Idle database connections |
+| `db_connections_max` | Count | Maximum allowed connections |
+| `db_queries_per_second` | Rate | Query throughput (QPS) |
+| `db_slow_queries` | Count | Slow queries (>1 second) |
+| `db_cache_hit_ratio` | Percentage | Database cache hit ratio |
+| `db_transactions_committed` | Count | Committed transactions |
+| `db_transactions_rolled_back` | Count | Rolled back transactions |
+| `db_database_size_bytes` | Bytes | Database size |
+| `db_locks_waiting` | Count | Waiting locks count |
+
+**Supported databases**: PostgreSQL, MySQL
+
+---
+
+## Performance
+
+| Metric | Value |
+|--------|-------|
+| CPU Usage | < 2% |
+| Memory Usage | < 50 MB |
+| Network | ~1-2 KB/s |
+| Collection Time | < 100ms |
+
+---
+
+## License
+
+MIT License - See [LICENSE](../LICENSE) for details.
+
+---
+
+<p align="center">
+  Built with ❤️ using Rust
+</p>

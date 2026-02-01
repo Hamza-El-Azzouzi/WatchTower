@@ -4,39 +4,66 @@
  */
 
 export type WsMetricMessage = {
-  Metric: {
-    agent_id: string;
-    metric_name: string;
-    value: number;
-    timestamp: string;
-  };
+  type: "metric";
+  agent_id: string;
+  metric_name: string;
+  value: number;
+  timestamp: string;
 };
 
 export type WsLogMessage = {
-  Log: {
-    agent_id: string;
-    level: string;
-    message: string;
-    timestamp: string;
-  };
+  type: "log";
+  agent_id: string;
+  level: string;
+  message: string;
+  source: string;
+  timestamp: string;
 };
 
 export type WsAlertMessage = {
-  Alert: {
-    alert_id: number;
-    agent_id: string;
-    severity: string;
-    message: string;
-    state: string;
-  };
+  type: "alert";
+  alert_id: string;
+  agent_id: string;
+  severity: string;
+  message: string;
+  state: string;
 };
 
-export type WsHeartbeat = "Heartbeat";
+export type WsAgentSnapshot = {
+  id: string;
+  name: string;
+  status: string;
+  last_seen: string;
+};
+
+export type WsMetricSnapshot = {
+  agent_id: string;
+  metric_name: string;
+  latest_value: number;
+  timestamp: string;
+};
+
+export type WsInitialStateMessage = {
+  type: "initial_state";
+  agents: WsAgentSnapshot[];
+  metrics: WsMetricSnapshot[];
+};
+
+export type WsHistoricalMetricsMessage = {
+  type: "historical_metrics";
+  agent_id: string;
+  metric_name: string;
+  data_points: { timestamp: string; value: number }[];
+};
+
+export type WsHeartbeat = { type: "heartbeat" };
 
 export type WsMessage =
   | WsMetricMessage
   | WsLogMessage
   | WsAlertMessage
+  | WsInitialStateMessage
+  | WsHistoricalMetricsMessage
   | WsHeartbeat;
 
 export type WebSocketCallback<T = WsMessage> = (message: T) => void;
@@ -125,17 +152,18 @@ export class WebSocketManager {
 
       this.ws.onmessage = (event) => {
         try {
-          const message: WsMessage = JSON.parse(event.data);
+          const message = JSON.parse(event.data);
 
           // Ignore heartbeat messages
-          if (message === "Heartbeat") {
+          if (message.type === "heartbeat") {
+            this.log("Received heartbeat");
             return;
           }
 
-          this.log("Received message:", message);
-          this.callbacks.forEach((cb) => cb(message));
+          this.log("Received message:", message.type, message);
+          this.callbacks.forEach((cb) => cb(message as WsMessage));
         } catch (err) {
-          this.error("Failed to parse message:", err);
+          this.error("Failed to parse message:", err, event.data);
         }
       };
 
@@ -234,20 +262,13 @@ export function createWebSocketManager(
   if (baseUrl) {
     wsUrl = baseUrl.replace(/^http/, 'ws');
   } else if (typeof window !== 'undefined') {
-    // In browser: use environment variable or derive from current location
-    const envUrl = process.env.NEXT_PUBLIC_API_URL;
-    if (envUrl && envUrl !== 'http://localhost:8080') {
-      wsUrl = envUrl.replace(/^http/, 'ws');
-    } else {
-      // Fallback: assume API is on port 8080 of the same host
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.hostname;
-      wsUrl = `${protocol}//${host}:8080`;
-    }
+    // In browser: always use localhost:8080 for the API server
+    // The dashboard runs on :3000, API server on :8080
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    wsUrl = `${wsProtocol}//localhost:8080`;
   } else {
     // Server-side: use environment variable or default
-    const envUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
-    wsUrl = envUrl.replace(/^http/, 'ws');
+    wsUrl = 'ws://localhost:8080';
   }
   
   const url = `${wsUrl}/api/v1/ws/${endpoint}`;

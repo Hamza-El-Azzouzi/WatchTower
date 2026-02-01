@@ -43,7 +43,13 @@ export function getMetricColor(metric: string, percentage: number): 'green' | 'y
 
 export function formatChartTime(timestamp: string): string {
   const date = new Date(timestamp);
-  return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  // Show HH:MM:SS for real-time precision
+  return date.toLocaleTimeString('en-US', { 
+    hour: '2-digit', 
+    minute: '2-digit', 
+    second: '2-digit',
+    hour12: false // Use 24-hour format for cleaner display
+  });
 }
 
 export function extractMetric(metrics: any[], metricName: string): number {

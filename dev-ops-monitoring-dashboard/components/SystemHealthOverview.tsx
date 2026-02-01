@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import {
   PieChart,
   Pie,
@@ -16,9 +15,9 @@ import {
   RadialBarChart,
   RadialBar,
 } from 'recharts';
-import { getLatestMetrics } from '@/lib/api';
-import { Agent, LatestMetrics } from '@/types';
+import { Agent } from '@/types';
 import { Activity, Cpu, HardDrive, Network } from 'lucide-react';
+import { useMetricsContext } from '@/contexts/MetricsContext';
 
 interface SystemHealthOverviewProps {
   agents: Agent[];
@@ -31,40 +30,12 @@ interface MetricData {
 }
 
 export default function SystemHealthOverview({ agents }: SystemHealthOverviewProps) {
-  const [metricsData, setMetricsData] = useState<Record<string, LatestMetrics>>({});
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchAllMetrics = async () => {
-      try {
-        const results: Record<string, LatestMetrics> = {};
-        await Promise.all(
-          agents.map(async (agent) => {
-            try {
-              const metrics = await getLatestMetrics(agent.id);
-              results[agent.id] = metrics;
-            } catch (error) {
-              console.error(`Failed to fetch metrics for ${agent.id}:`, error);
-            }
-          })
-        );
-        setMetricsData(results);
-      } catch (error) {
-        console.error('Error fetching metrics:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    if (agents.length > 0) {
-      fetchAllMetrics();
-      const interval = setInterval(fetchAllMetrics, 10000);
-      return () => clearInterval(interval);
-    }
-  }, [agents]);
+  // Get metrics from shared context
+  const { agentMetrics, initialStateReceived } = useMetricsContext();
+  const loading = !initialStateReceived;
 
   const getMetricValue = (agentId: string, metricName: string): number => {
-    const metrics = metricsData[agentId];
+    const metrics = agentMetrics[agentId];
     if (!metrics) return 0;
     const metric = metrics.metrics.find(m => m.name === metricName);
     return metric ? metric.value : 0;

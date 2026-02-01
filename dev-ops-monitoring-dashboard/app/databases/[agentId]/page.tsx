@@ -76,9 +76,7 @@ export default function DatabaseDetailPage() {
     };
 
     if (agentId) {
-      fetchData();
-      const interval = setInterval(fetchData, 10000);
-      return () => clearInterval(interval);
+      fetchData(); // Initial load only - consider adding WebSocket for real-time updates
     }
   }, [agentId]);
 

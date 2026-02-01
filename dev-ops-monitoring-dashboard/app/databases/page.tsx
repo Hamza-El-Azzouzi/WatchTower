@@ -1,15 +1,41 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { Database, Activity, HardDrive, Lock, TrendingUp } from 'lucide-react';
 import { getAgents, getLatestMetrics } from '@/lib/api';
 import { formatBytes, extractMetric } from '@/lib/metrics-utils';
 import { Agent, LatestMetrics, DatabaseAgent } from '@/types';
+import { useMetricsWebSocket } from '@/hooks/useWebSocket';
+import { WsMetricMessage } from '@/lib/websocket';
 
 export default function DatabasesPage() {
   const [dbAgents, setDbAgents] = useState<DatabaseAgent[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // WebSocket handler for real-time metric updates
+  const handleMetricUpdate = useCallback((metricMessage: WsMetricMessage) => {
+    const agentId = metricMessage.Metric.agent_id
+    const metricName = metricMessage.Metric.name
+    const metricValue = metricMessage.Metric.value
+
+    setDbAgents(prev => prev.map(dbAgent => {
+      if (dbAgent.agent.agent_id === agentId) {
+        return {
+          ...dbAgent,
+          metrics: {
+            ...dbAgent.metrics,
+            metrics: dbAgent.metrics.metrics.map(m =>
+              m.name === metricName ? { ...m, value: metricValue } : m
+            )
+          }
+        }
+      }
+      return dbAgent
+    }))
+  }, [])
+
+  useMetricsWebSocket(handleMetricUpdate)
 
   useEffect(() => {
     const fetchData = async () => {
@@ -39,10 +65,7 @@ export default function DatabasesPage() {
       }
     };
 
-    fetchData();
-    const interval = setInterval(fetchData, 10000); // Refresh every 10 seconds
-
-    return () => clearInterval(interval);
+    fetchData(); // Initial load only, WebSocket handles updates
   }, []);
 
   if (loading) {

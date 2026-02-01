@@ -1,38 +1,21 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
 import { HardDrive, Zap, Database } from 'lucide-react';
 import StatusBadge from './StatusBadge';
 import { formatRelativeTime, formatBytes, calculatePercentage, extractMetric } from '@/lib/metrics-utils';
-import { getLatestMetrics } from '@/lib/api';
-import { Agent, LatestMetrics } from '@/types';
+import { Agent } from '@/types';
+import { useMetricsContext } from '@/contexts/MetricsContext';
 
 interface ServerCardProps {
   agent: Agent;
 }
 
 export default function ServerCard({ agent }: ServerCardProps) {
-  const [metrics, setMetrics] = useState<LatestMetrics | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const fetchMetrics = async () => {
-      try {
-        setLoading(true);
-        const data = await getLatestMetrics(agent.id);
-        setMetrics(data);
-        setError(null);
-      } catch {
-        setError('Failed to load metrics');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchMetrics();
-  }, [agent.id]);
+  // Get metrics from shared context
+  const { agentMetrics, initialStateReceived } = useMetricsContext();
+  const metrics = agentMetrics[agent.id] || null;
+  const loading = !initialStateReceived;
 
   const borderColorMap = {
     Healthy: 'border-green-700/50 hover:border-green-600',
@@ -56,14 +39,23 @@ export default function ServerCard({ agent }: ServerCardProps) {
     cpuPercent = extractMetric(metrics.metrics, 'cpu_usage');
     memoryPercent = extractMetric(metrics.metrics, 'memory_usage');
 
-    // Memory display with bytes (calculate from percentage if needed)
-    // For now, show "0 Bytes / 0 Bytes" since we only have percentage
-    memoryDisplay = `0 Bytes / 0 Bytes`;
+    // Memory display - get from metrics
+    const memoryUsed = extractMetric(metrics.metrics, 'memory_used_bytes');
+    const memoryTotal = extractMetric(metrics.metrics, 'memory_total_bytes');
+    if (memoryTotal > 0) {
+      memoryDisplay = `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`;
+    }
 
+    // Disk display - get from metrics
     const diskUsed = extractMetric(metrics.metrics, 'disk_used_bytes');
     const diskTotal = extractMetric(metrics.metrics, 'disk_total_bytes');
-    diskPercent = calculatePercentage(diskUsed, diskTotal);
-    diskDisplay = `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`;
+    if (diskTotal > 0) {
+      diskPercent = calculatePercentage(diskUsed, diskTotal);
+      diskDisplay = `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`;
+    } else {
+      // Fallback to disk_usage percentage if bytes not available
+      diskPercent = extractMetric(metrics.metrics, 'disk_usage');
+    }
   }
 
   return (
@@ -79,88 +71,82 @@ export default function ServerCard({ agent }: ServerCardProps) {
           <StatusBadge status={agent.status} size="sm" />
         </div>
 
-        {error && (
-          <div className="text-sm text-red-400 mb-4">{error}</div>
-        )}
-
-        {!error && (
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <div className="flex items-center gap-1 mb-2">
-                  <Zap className="w-4 h-4 text-blue-400" />
-                  <span className="text-xs text-muted-foreground">CPU</span>
-                </div>
-                <p className="text-lg font-semibold text-white">
-                  {loading ? '-' : cpuPercent.toFixed(1)}%
-                </p>
-                {!loading && (
-                  <div className="mt-2 h-2 bg-background/30 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        cpuPercent < 70 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : cpuPercent < 85 ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-400 to-red-500'
-                      }`}
-                      style={{ width: `${Math.min(cpuPercent, 100)}%` }}
-                    />
-                  </div>
-                )}
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <div className="flex items-center gap-1 mb-2">
+                <Zap className="w-4 h-4 text-blue-400" />
+                <span className="text-xs text-muted-foreground">CPU</span>
               </div>
-
-              <div>
-                <div className="flex items-center gap-1 mb-2">
-                  <Database className="w-4 h-4 text-purple-400" />
-                  <span className="text-xs text-muted-foreground">Memory</span>
+              <p className="text-lg font-semibold text-white">
+                {loading ? '-' : cpuPercent.toFixed(1)}%
+              </p>
+              {!loading && (
+                <div className="mt-2 h-2 bg-background/30 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      cpuPercent < 70 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : cpuPercent < 85 ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-400 to-red-500'
+                    }`}
+                    style={{ width: `${Math.min(cpuPercent, 100)}%` }}
+                  />
                 </div>
-                <p className="text-lg font-semibold text-white">
-                  {loading ? '-' : memoryPercent.toFixed(1)}%
-                </p>
-                {!loading && (
-                  <div className="mt-2 h-2 bg-background/30 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        memoryPercent < 80 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : memoryPercent < 90 ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-400 to-red-500'
-                      }`}
-                      style={{ width: `${Math.min(memoryPercent, 100)}%` }}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <div className="flex items-center gap-1 mb-2">
-                  <HardDrive className="w-4 h-4 text-orange-400" />
-                  <span className="text-xs text-muted-foreground">Disk</span>
-                </div>
-                <p className="text-lg font-semibold text-white">
-                  {loading ? '-' : diskPercent.toFixed(1)}%
-                </p>
-                {!loading && (
-                  <div className="mt-2 h-2 bg-background/30 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all ${
-                        diskPercent < 70 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : diskPercent < 90 ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-400 to-red-500'
-                      }`}
-                      style={{ width: `${Math.min(diskPercent, 100)}%` }}
-                    />
-                  </div>
-                )}
-              </div>
+              )}
             </div>
 
-            {!loading && (
-              <div className="pt-3 border-t border-border text-xs text-muted-foreground space-y-1">
-                <p>Memory: {memoryDisplay}</p>
-                <p>Disk: {diskDisplay}</p>
+            <div>
+              <div className="flex items-center gap-1 mb-2">
+                <Database className="w-4 h-4 text-purple-400" />
+                <span className="text-xs text-muted-foreground">Memory</span>
               </div>
-            )}
+              <p className="text-lg font-semibold text-white">
+                {loading ? '-' : memoryPercent.toFixed(1)}%
+              </p>
+              {!loading && (
+                <div className="mt-2 h-2 bg-background/30 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      memoryPercent < 80 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : memoryPercent < 90 ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-400 to-red-500'
+                    }`}
+                    style={{ width: `${Math.min(memoryPercent, 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
 
-            <div className="pt-3">
-              <span className="text-xs font-medium text-accent group-hover:text-primary transition-colors">
-                View Details →
-              </span>
+            <div>
+              <div className="flex items-center gap-1 mb-2">
+                <HardDrive className="w-4 h-4 text-orange-400" />
+                <span className="text-xs text-muted-foreground">Disk</span>
+              </div>
+              <p className="text-lg font-semibold text-white">
+                {loading ? '-' : diskPercent.toFixed(1)}%
+              </p>
+              {!loading && (
+                <div className="mt-2 h-2 bg-background/30 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      diskPercent < 70 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : diskPercent < 90 ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-400 to-red-500'
+                    }`}
+                    style={{ width: `${Math.min(diskPercent, 100)}%` }}
+                  />
+                </div>
+              )}
             </div>
           </div>
-        )}
+
+          {!loading && (
+            <div className="pt-3 border-t border-border text-xs text-muted-foreground space-y-1">
+              <p>Memory: {memoryDisplay}</p>
+              <p>Disk: {diskDisplay}</p>
+            </div>
+          )}
+
+          <div className="pt-3">
+            <span className="text-xs font-medium text-accent group-hover:text-primary transition-colors">
+              View Details →
+            </span>
+          </div>
+        </div>
       </div>
     </Link>
   );

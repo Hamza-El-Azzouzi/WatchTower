@@ -1,22 +1,27 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect } from 'react';
 import PageHeader from '@/components/PageHeader';
 import HeroBanner from '@/components/HeroBanner';
 import StatsCards from '@/components/StatsCards';
 import ServerCard from '@/components/ServerCard';
 import SystemHealthOverview from '@/components/SystemHealthOverview';
-import { getAgents } from '@/lib/api';
-import { Agent } from '@/types';
+import ConnectionStatus from '@/components/ConnectionStatus';
 import { AlertCircle, Loader, Wifi, WifiOff } from 'lucide-react';
-import { useMetricsWebSocket } from '@/hooks/useWebSocket';
-import { WsMetricMessage } from '@/lib/websocket';
+import { useMetricsContext } from '@/contexts/MetricsContext';
 
 export default function OverviewPage() {
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState(new Date());
+  // Use the shared WebSocket context
+  const { 
+    isConnected, 
+    connectionState, 
+    initialStateReceived, 
+    agents, 
+    agentMetrics, 
+    lastUpdated 
+  } = useMetricsContext();
+
+  const loading = !initialStateReceived;
 
   // Log component mount
   useEffect(() => {
@@ -24,58 +29,29 @@ export default function OverviewPage() {
     return () => console.log('[OverviewPage] Component unmounted');
   }, []);
 
-  // Subscribe to WebSocket for real-time metrics
-  const handleMetricUpdate = useCallback((metricMessage: WsMetricMessage) => {
-    console.log('[OverviewPage] Received metric update:', metricMessage);
-    setLastUpdated(new Date());
-    // Update agent metrics in real-time as they come in via WebSocket
-    setAgents(prev => 
-      prev.map(agent => 
-        agent.agent_id === metricMessage.Metric.agent_id
-          ? { ...agent, last_seen: metricMessage.Metric.timestamp }
-          : agent
-      )
-    );
-  }, []);
-
-  const { isConnected: wsConnected } = useMetricsWebSocket(handleMetricUpdate);
-  
   // Log connection state changes
   useEffect(() => {
-    console.log('[OverviewPage] WebSocket connected:', wsConnected);
-  }, [wsConnected]);
-
-  // Initial load of agents (one-time HTTP fetch)
-  useEffect(() => {
-    const fetchAgents = async () => {
-      try {
-        const data = await getAgents();
-        setAgents(data);
-        setLastUpdated(new Date());
-        setError(null);
-      } catch {
-        setError('Failed to load servers. Make sure the API is running at http://localhost:8080');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchAgents();
-  }, []);
+    console.log('[OverviewPage] WebSocket state:', connectionState);
+  }, [connectionState]);
 
   return (
     <div className="min-h-screen bg-background">
       <PageHeader />
 
       <main className="max-w-7xl mx-auto px-8 py-8">
+        {/* Global Connection Status */}
+        <div className="flex justify-end mb-4">
+          <ConnectionStatus state={connectionState} />
+        </div>
+        
         <HeroBanner />
         
-        {error && (
+        {connectionState === 'disconnected' && (
           <div className="mb-8 glass-morphism rounded-xl border border-red-500/30 bg-red-500/10 p-4 flex items-start gap-3 animate-slide-up">
             <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
             <div>
               <h3 className="font-semibold text-red-300 mb-1">Connection Error</h3>
-              <p className="text-sm text-red-200">{error}</p>
+              <p className="text-sm text-red-200">WebSocket disconnected. Attempting to reconnect...</p>
             </div>
           </div>
         )}
@@ -113,7 +89,7 @@ export default function OverviewPage() {
 
             <div className="mt-12 pt-8 border-t border-border flex items-center justify-between">
               <div className="text-xs text-muted-foreground flex items-center gap-2">
-                {wsConnected ? (
+                {isConnected ? (
                   <>
                     <Wifi className="w-3 h-3 text-emerald-500" />
                     <span className="text-emerald-500">WebSocket Connected</span>

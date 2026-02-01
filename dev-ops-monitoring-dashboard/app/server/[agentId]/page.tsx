@@ -1,16 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, AlertCircle, Loader } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Loader, Wifi, WifiOff } from 'lucide-react';
 import StatusBadge from '@/components/StatusBadge';
 import MetricsSection from '@/components/MetricsSection';
 import ChartsSection from '@/components/ChartsSection';
 import AlertThresholdChart from '@/components/AlertThresholdChart';
-import { getAgents, getLatestMetrics } from '@/lib/api';
+import ConnectionStatus from '@/components/ConnectionStatus';
 import { formatRelativeTime } from '@/lib/metrics-utils';
-import { Agent, LatestMetrics } from '@/types';
+import { Agent, LatestMetrics, Metric } from '@/types';
+import { useMetricsWebSocket } from '@/hooks/useWebSocket';
+import { WsMetricMessage, WsAgentSnapshot, WsMetricSnapshot } from '@/lib/websocket';
 
 export default function ServerDetailPage() {
   const params = useParams();
@@ -21,48 +23,100 @@ export default function ServerDetailPage() {
   const [metrics, setMetrics] = useState<LatestMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState(new Date());
 
-  useEffect(() => {
-    let isInitialLoad = true;
-
-    const fetchData = async () => {
-      try {
-        // Only show loading state on initial load, not on refreshes
-        if (isInitialLoad) {
-          setLoading(true);
-        }
-        
-        const agents = await getAgents();
-        const foundAgent = agents.find(a => a.id === agentId);
-
-        if (!foundAgent) {
-          setError('Server not found');
-          return;
-        }
-
-        setAgent(foundAgent);
-
-        const metricsData = await getLatestMetrics(agentId);
-        setMetrics(metricsData);
-        setError(null);
-      } catch {
-        setError('Failed to load server details');
-      } finally {
-        if (isInitialLoad) {
-          setLoading(false);
-          isInitialLoad = false;
-        }
-      }
-    };
-
-    if (agentId) {
-      fetchData();
-
-      // Poll every 1 second for real-time updates
-      const interval = setInterval(fetchData, 1000);
-      return () => clearInterval(interval);
+  // Handle initial state from WebSocket - replaces HTTP fetch
+  const handleInitialState = useCallback((agents: WsAgentSnapshot[], metricsSnapshots: WsMetricSnapshot[]) => {
+    console.log('[ServerDetail] Received initial state');
+    
+    // Find this agent
+    const foundAgent = agents.find(a => a.id === agentId);
+    if (foundAgent) {
+      setAgent({
+        id: foundAgent.id,
+        agent_id: foundAgent.id,
+        name: foundAgent.name,
+        status: foundAgent.status as 'Healthy' | 'Degraded' | 'Unreachable',
+        last_seen: foundAgent.last_seen,
+      });
     }
+    
+    // Get metrics for this agent
+    const agentMetrics = metricsSnapshots.filter(m => m.agent_id === agentId);
+    if (agentMetrics.length > 0) {
+      setMetrics({
+        agent_id: agentId,
+        metrics: agentMetrics.map(m => ({
+          name: m.metric_name,
+          value: m.latest_value,
+          timestamp: m.timestamp,
+        })),
+      });
+    }
+    
+    setLoading(false);
+    setLastUpdated(new Date());
   }, [agentId]);
+
+  // Handle real-time metric updates
+  const handleMetricUpdate = useCallback((metricMessage: WsMetricMessage) => {
+    if (metricMessage.agent_id !== agentId) return;
+    
+    setLastUpdated(new Date());
+    
+    // Update the metrics state with new metric values as they arrive
+    setMetrics(prev => {
+      if (!prev) {
+        return {
+          agent_id: agentId,
+          metrics: [{
+            name: metricMessage.metric_name,
+            value: metricMessage.value,
+            timestamp: metricMessage.timestamp,
+          }],
+        };
+      }
+      
+      const newMetric: Metric = {
+        name: metricMessage.metric_name,
+        value: metricMessage.value,
+        timestamp: metricMessage.timestamp,
+      };
+      if (!newMetric.name) return prev;
+      
+      // Find and replace the metric or add it
+      const existingIndex = prev.metrics.findIndex(m => m.name === metricMessage.metric_name);
+      
+      const updatedMetrics = [...prev.metrics];
+      if (existingIndex >= 0) {
+        updatedMetrics[existingIndex] = newMetric;
+      } else {
+        updatedMetrics.push(newMetric);
+      }
+      
+      return {
+        ...prev,
+        metrics: updatedMetrics,
+      };
+    });
+    
+    // Also update agent's last_seen
+    setAgent(prev => prev ? { ...prev, last_seen: metricMessage.timestamp } : prev);
+  }, [agentId]);
+
+  // Connect to WebSocket - this is the ONLY data source
+  const { isConnected, connectionState, initialStateReceived } = useMetricsWebSocket({
+    onMetric: handleMetricUpdate,
+    onInitialState: handleInitialState,
+  });
+
+  // Check if agent not found after initial state
+  useEffect(() => {
+    if (initialStateReceived && !agent) {
+      setError('Server not found');
+      setLoading(false);
+    }
+  }, [initialStateReceived, agent]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -143,6 +197,15 @@ export default function ServerDetailPage() {
 
             <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Historical Charts</h2>
             <ChartsSection agentId={agentId} />
+
+            {/* WebSocket Status Footer */}
+            <div className="mt-12 pt-8 border-t border-border flex items-center justify-between">
+              <div className="text-xs text-muted-foreground flex items-center gap-2">
+                <ConnectionStatus state={connectionState} />
+                <span className="mx-2">•</span>
+                Last updated: {lastUpdated.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </div>
+            </div>
           </>
         ) : null}
       </main>

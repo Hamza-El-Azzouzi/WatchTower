@@ -8,23 +8,37 @@ import {
   WsMetricMessage,
   WsLogMessage,
   WsAlertMessage,
+  WsInitialStateMessage,
+  WsAgentSnapshot,
+  WsMetricSnapshot,
 } from "@/lib/websocket";
 
+export interface MetricsWebSocketCallbacks {
+  onMetric?: (message: WsMetricMessage) => void;
+  onInitialState?: (agents: WsAgentSnapshot[], metrics: WsMetricSnapshot[]) => void;
+}
+
 /**
- * Hook for real-time metrics updates - simplified, self-contained implementation
+ * Hook for real-time metrics updates with initial state sync
+ * This is the PRIMARY hook for all live metrics data - no HTTP fallback!
  */
-export function useMetricsWebSocket(
-  onMetric: (message: WsMetricMessage) => void
-) {
+export function useMetricsWebSocket(callbacks: MetricsWebSocketCallbacks | ((message: WsMetricMessage) => void)) {
   const [isConnected, setIsConnected] = useState(false);
-  const [connectionState, setConnectionState] = useState<string>("disconnected");
+  const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "disconnected">("disconnected");
+  const [initialStateReceived, setInitialStateReceived] = useState(false);
   const wsManagerRef = useRef<WebSocketManager | null>(null);
-  const onMetricRef = useRef(onMetric);
+  
+  // Normalize callbacks
+  const normalizedCallbacks = typeof callbacks === 'function' 
+    ? { onMetric: callbacks } 
+    : callbacks;
+  
+  const callbacksRef = useRef(normalizedCallbacks);
   
   // Keep callback ref updated
   useEffect(() => {
-    onMetricRef.current = onMetric;
-  }, [onMetric]);
+    callbacksRef.current = normalizedCallbacks;
+  }, [normalizedCallbacks]);
 
   useEffect(() => {
     console.log("[useMetricsWebSocket] Initializing WebSocket connection...");
@@ -36,14 +50,39 @@ export function useMetricsWebSocket(
     // Subscribe to state changes
     const unsubscribeState = manager.onStateChange((state) => {
       console.log("[useMetricsWebSocket] Connection state:", state);
-      setConnectionState(state);
+      setConnectionState(state as "connecting" | "connected" | "disconnected");
       setIsConnected(state === "connected");
+      
+      // Reset initial state flag on disconnect
+      if (state === "disconnected") {
+        setInitialStateReceived(false);
+      }
     });
 
     // Subscribe to messages
     const unsubscribeMessages = manager.subscribe((message: WsMessage) => {
-      if (typeof message !== "string" && "Metric" in message) {
-        onMetricRef.current(message as WsMetricMessage);
+      // Handle initial state message
+      if (message.type === "initial_state") {
+        console.log("[useMetricsWebSocket] Received initial state:", 
+          (message as WsInitialStateMessage).agents.length, "agents,",
+          (message as WsInitialStateMessage).metrics.length, "metrics"
+        );
+        setInitialStateReceived(true);
+        callbacksRef.current.onInitialState?.(
+          (message as WsInitialStateMessage).agents,
+          (message as WsInitialStateMessage).metrics
+        );
+        return;
+      }
+      
+      // Handle real-time metric updates
+      if (message.type === "metric") {
+        console.log("[useMetricsWebSocket] Received metric:", 
+          (message as WsMetricMessage).agent_id,
+          (message as WsMetricMessage).metric_name,
+          (message as WsMetricMessage).value
+        );
+        callbacksRef.current.onMetric?.(message as WsMetricMessage);
       }
     });
 
@@ -60,15 +99,15 @@ export function useMetricsWebSocket(
     };
   }, []); // Only run once on mount
 
-  return { isConnected, connectionState };
+  return { isConnected, connectionState, initialStateReceived };
 }
 
 /**
- * Hook for real-time log updates - simplified, self-contained implementation
+ * Hook for real-time log updates
  */
 export function useLogsWebSocket(onLog: (message: WsLogMessage) => void) {
   const [isConnected, setIsConnected] = useState(false);
-  const [connectionState, setConnectionState] = useState<string>("disconnected");
+  const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "disconnected">("disconnected");
   const wsManagerRef = useRef<WebSocketManager | null>(null);
   const onLogRef = useRef(onLog);
   
@@ -84,12 +123,12 @@ export function useLogsWebSocket(onLog: (message: WsLogMessage) => void) {
 
     const unsubscribeState = manager.onStateChange((state) => {
       console.log("[useLogsWebSocket] Connection state:", state);
-      setConnectionState(state);
+      setConnectionState(state as "connecting" | "connected" | "disconnected");
       setIsConnected(state === "connected");
     });
 
     const unsubscribeMessages = manager.subscribe((message: WsMessage) => {
-      if (typeof message !== "string" && "Log" in message) {
+      if (message.type === "log") {
         onLogRef.current(message as WsLogMessage);
       }
     });
@@ -109,11 +148,11 @@ export function useLogsWebSocket(onLog: (message: WsLogMessage) => void) {
 }
 
 /**
- * Hook for real-time alert updates - simplified, self-contained implementation
+ * Hook for real-time alert updates
  */
 export function useAlertsWebSocket(onAlert: (message: WsAlertMessage) => void) {
   const [isConnected, setIsConnected] = useState(false);
-  const [connectionState, setConnectionState] = useState<string>("disconnected");
+  const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "disconnected">("disconnected");
   const wsManagerRef = useRef<WebSocketManager | null>(null);
   const onAlertRef = useRef(onAlert);
   
@@ -129,12 +168,12 @@ export function useAlertsWebSocket(onAlert: (message: WsAlertMessage) => void) {
 
     const unsubscribeState = manager.onStateChange((state) => {
       console.log("[useAlertsWebSocket] Connection state:", state);
-      setConnectionState(state);
+      setConnectionState(state as "connecting" | "connected" | "disconnected");
       setIsConnected(state === "connected");
     });
 
     const unsubscribeMessages = manager.subscribe((message: WsMessage) => {
-      if (typeof message !== "string" && "Alert" in message) {
+      if (message.type === "alert") {
         onAlertRef.current(message as WsAlertMessage);
       }
     });

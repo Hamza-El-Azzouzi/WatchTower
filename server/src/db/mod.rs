@@ -400,6 +400,107 @@ impl Database {
         Ok(())
     }
 
+    /// Query metrics from database with optional time range and limit
+    pub async fn query_metrics(
+        &self,
+        agent_id: &str,
+        metric_name: &str,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+        limit: Option<usize>,
+    ) -> Result<Vec<crate::storage::DataPoint>> {
+        let query_str = match (from, to, limit) {
+            (Some(_), Some(_), Some(lim)) => format!(
+                "SELECT value, timestamp FROM metrics 
+                 WHERE agent_id = $1 AND metric_name = $2 AND timestamp >= $3 AND timestamp <= $4 
+                 ORDER BY timestamp DESC LIMIT {}",
+                lim
+            ),
+            (Some(_), None, Some(lim)) => format!(
+                "SELECT value, timestamp FROM metrics 
+                 WHERE agent_id = $1 AND metric_name = $2 AND timestamp >= $3 
+                 ORDER BY timestamp DESC LIMIT {}",
+                lim
+            ),
+            (None, Some(_), Some(lim)) => format!(
+                "SELECT value, timestamp FROM metrics 
+                 WHERE agent_id = $1 AND metric_name = $2 AND timestamp <= $3 
+                 ORDER BY timestamp DESC LIMIT {}",
+                lim
+            ),
+            (None, None, Some(lim)) => format!(
+                "SELECT value, timestamp FROM metrics 
+                 WHERE agent_id = $1 AND metric_name = $2 
+                 ORDER BY timestamp DESC LIMIT {}",
+                lim
+            ),
+            (Some(_), Some(_), None) => 
+                "SELECT value, timestamp FROM metrics 
+                 WHERE agent_id = $1 AND metric_name = $2 AND timestamp >= $3 AND timestamp <= $4 
+                 ORDER BY timestamp DESC".to_string(),
+            (Some(_), None, None) => 
+                "SELECT value, timestamp FROM metrics 
+                 WHERE agent_id = $1 AND metric_name = $2 AND timestamp >= $3 
+                 ORDER BY timestamp DESC".to_string(),
+            (None, Some(_), None) => 
+                "SELECT value, timestamp FROM metrics 
+                 WHERE agent_id = $1 AND metric_name = $2 AND timestamp <= $3 
+                 ORDER BY timestamp DESC".to_string(),
+            (None, None, None) => 
+                "SELECT value, timestamp FROM metrics 
+                 WHERE agent_id = $1 AND metric_name = $2 
+                 ORDER BY timestamp DESC".to_string(),
+        };
+
+        let mut query = sqlx::query(&query_str)
+            .bind(agent_id)
+            .bind(metric_name);
+
+        if let Some(f) = from {
+            query = query.bind(f);
+        }
+        if let Some(t) = to {
+            query = query.bind(t);
+        }
+
+        let rows = query.fetch_all(&self.pool).await?;
+
+        let mut data_points: Vec<crate::storage::DataPoint> = rows
+            .into_iter()
+            .map(|row| crate::storage::DataPoint {
+                value: row.get("value"),
+                timestamp: row.get("timestamp"),
+            })
+            .collect();
+
+        // Reverse to get chronological order
+        data_points.reverse();
+
+        Ok(data_points)
+    }
+
+    /// Get latest metrics for an agent from database
+    pub async fn get_latest_metrics(&self, agent_id: &str) -> Result<Vec<(String, f64, DateTime<Utc>)>> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT ON (metric_name) metric_name, value, timestamp 
+             FROM metrics 
+             WHERE agent_id = $1 
+             ORDER BY metric_name, timestamp DESC"
+        )
+        .bind(agent_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| (
+                row.get::<String, _>("metric_name"),
+                row.get::<f64, _>("value"),
+                row.get::<DateTime<Utc>, _>("timestamp"),
+            ))
+            .collect())
+    }
+
     /// Insert log entry into database
     pub async fn insert_log(
         &self,
