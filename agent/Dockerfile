@@ -27,13 +27,17 @@ WORKDIR /app
 # Copy the binary from builder
 COPY --from=builder /app/target/release/monitor-agent /usr/local/bin/monitor-agent
 
-# Copy startup script
-COPY docker-entrypoint.sh /usr/local/bin/
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Create config directory
+RUN mkdir -p /etc/monitor-agent
 
 # Default environment variables
+ENV AGENT_ID=docker-agent
 ENV AGENT_NAME=docker-agent
 ENV SERVER_URL=http://host.docker.internal:8080
 ENV COLLECTION_INTERVAL=15
 
-ENTRYPOINT ["docker-entrypoint.sh"]
+# Volume for configuration
+VOLUME ["/etc/monitor-agent"]
+
+# Run the agent
+CMD ["monitor-agent", "-c", "/etc/monitor-agent/agent.toml"]
