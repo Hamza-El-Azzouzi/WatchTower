@@ -434,27 +434,25 @@ impl Database {
                  ORDER BY timestamp DESC LIMIT {}",
                 lim
             ),
-            (Some(_), Some(_), None) => 
-                "SELECT value, timestamp FROM metrics 
+            (Some(_), Some(_), None) => "SELECT value, timestamp FROM metrics 
                  WHERE agent_id = $1 AND metric_name = $2 AND timestamp >= $3 AND timestamp <= $4 
-                 ORDER BY timestamp DESC".to_string(),
-            (Some(_), None, None) => 
-                "SELECT value, timestamp FROM metrics 
+                 ORDER BY timestamp DESC"
+                .to_string(),
+            (Some(_), None, None) => "SELECT value, timestamp FROM metrics 
                  WHERE agent_id = $1 AND metric_name = $2 AND timestamp >= $3 
-                 ORDER BY timestamp DESC".to_string(),
-            (None, Some(_), None) => 
-                "SELECT value, timestamp FROM metrics 
+                 ORDER BY timestamp DESC"
+                .to_string(),
+            (None, Some(_), None) => "SELECT value, timestamp FROM metrics 
                  WHERE agent_id = $1 AND metric_name = $2 AND timestamp <= $3 
-                 ORDER BY timestamp DESC".to_string(),
-            (None, None, None) => 
-                "SELECT value, timestamp FROM metrics 
+                 ORDER BY timestamp DESC"
+                .to_string(),
+            (None, None, None) => "SELECT value, timestamp FROM metrics 
                  WHERE agent_id = $1 AND metric_name = $2 
-                 ORDER BY timestamp DESC".to_string(),
+                 ORDER BY timestamp DESC"
+                .to_string(),
         };
 
-        let mut query = sqlx::query(&query_str)
-            .bind(agent_id)
-            .bind(metric_name);
+        let mut query = sqlx::query(&query_str).bind(agent_id).bind(metric_name);
 
         if let Some(f) = from {
             query = query.bind(f);
@@ -480,12 +478,15 @@ impl Database {
     }
 
     /// Get latest metrics for an agent from database
-    pub async fn get_latest_metrics(&self, agent_id: &str) -> Result<Vec<(String, f64, DateTime<Utc>)>> {
+    pub async fn get_latest_metrics(
+        &self,
+        agent_id: &str,
+    ) -> Result<Vec<(String, f64, DateTime<Utc>)>> {
         let rows = sqlx::query(
             "SELECT DISTINCT ON (metric_name) metric_name, value, timestamp 
              FROM metrics 
              WHERE agent_id = $1 
-             ORDER BY metric_name, timestamp DESC"
+             ORDER BY metric_name, timestamp DESC",
         )
         .bind(agent_id)
         .fetch_all(&self.pool)
@@ -493,11 +494,13 @@ impl Database {
 
         Ok(rows
             .into_iter()
-            .map(|row| (
-                row.get::<String, _>("metric_name"),
-                row.get::<f64, _>("value"),
-                row.get::<DateTime<Utc>, _>("timestamp"),
-            ))
+            .map(|row| {
+                (
+                    row.get::<String, _>("metric_name"),
+                    row.get::<f64, _>("value"),
+                    row.get::<DateTime<Utc>, _>("timestamp"),
+                )
+            })
             .collect())
     }
 
