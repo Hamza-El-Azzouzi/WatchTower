@@ -201,18 +201,21 @@ pub async fn query_metrics(
             .store
             .query(&params.agent_id, &params.metric, params.from, params.to);
 
-    // If in-memory store doesn't have enough data and database is available, 
+    // If in-memory store doesn't have enough data and database is available,
     // fallback to database for historical data
     let requested_limit = params.limit.unwrap_or(100);
     if data_points.len() < requested_limit {
         if let Some(db) = &state.database {
-            match db.query_metrics(
-                &params.agent_id,
-                &params.metric,
-                params.from,
-                params.to,
-                Some(requested_limit),
-            ).await {
+            match db
+                .query_metrics(
+                    &params.agent_id,
+                    &params.metric,
+                    params.from,
+                    params.to,
+                    Some(requested_limit),
+                )
+                .await
+            {
                 Ok(db_points) => {
                     // Use database results if we got more data
                     if db_points.len() > data_points.len() {
@@ -666,6 +669,7 @@ pub async fn list_alerts(
 }
 
 /// GET /api/v1/alerts/:id - Get specific alert
+#[allow(dead_code)]
 pub async fn get_alert(
     State(state): State<Arc<AppState>>,
     Path(alert_id): Path<String>,
@@ -723,6 +727,7 @@ pub async fn system_health(State(state): State<Arc<AppState>>) -> impl IntoRespo
 }
 
 /// GET /api/v1/stats - Get database statistics
+#[allow(dead_code)]
 pub async fn get_database_stats(
     State(state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, ApiError> {

@@ -1,7 +1,7 @@
-# 🤖 Monitoring Agent
+# 🤖 WatchTower Agent
 
 <p align="center">
-  <strong>Lightweight, cross-platform system metrics collector built with Rust</strong>
+  <strong>Lightweight, cross-platform system metrics collector for WatchTower monitoring platform</strong>
 </p>
 
 ---

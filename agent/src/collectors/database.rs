@@ -1,4 +1,5 @@
 use crate::config::DatabaseConfig;
+#[cfg(feature = "postgres")]
 use anyhow::Context;
 use anyhow::Result;
 use std::collections::HashMap;

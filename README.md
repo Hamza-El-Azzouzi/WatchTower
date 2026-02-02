@@ -1,4 +1,4 @@
-# 🚀 DevOps Monitoring System
+# 🏰 WatchTower
 
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust"/>
@@ -36,9 +36,9 @@
 
 ## 🎯 Overview
 
-DevOps Monitoring System is a **production-ready monitoring solution** designed for modern infrastructure. Built from the ground up with performance and reliability in mind, it provides real-time visibility into your entire server fleet through beautiful dashboards, instant alerts, and comprehensive metrics collection.
+**WatchTower** is a production-ready monitoring solution that stands guard over your infrastructure 24/7. Built from the ground up with performance and reliability in mind, it provides real-time visibility into your entire server fleet through beautiful dashboards, instant alerts, and comprehensive metrics collection.
 
-**Think of it as:** Your own Prometheus + Grafana + ELK Stack, unified in one powerful system.
+**Think of it as:** Your own Prometheus + Grafana + ELK Stack, unified in one powerful system - a watchtower that never sleeps.
 
 ### Why This Project?
 

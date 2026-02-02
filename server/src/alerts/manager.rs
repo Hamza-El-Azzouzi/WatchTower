@@ -374,6 +374,7 @@ impl AlertManager {
         all
     }
 
+    #[allow(dead_code)]
     pub async fn get_alert(&self, alert_id: &str) -> Option<Alert> {
         // First check cache
         let alerts = self.alerts_cache.read().await;

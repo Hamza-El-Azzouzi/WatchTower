@@ -1,7 +1,7 @@
-# ⚙️ Monitoring Server
+# ⚙️ WatchTower Server
 
 <p align="center">
-  <strong>High-performance central monitoring server built with Rust, Axum, and Tokio</strong>
+  <strong>High-performance central monitoring server for WatchTower platform - built with Rust, Axum, and Tokio</strong>
 </p>
 
 ---
