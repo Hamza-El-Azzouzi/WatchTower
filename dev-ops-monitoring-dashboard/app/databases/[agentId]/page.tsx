@@ -1,13 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Database, Activity, TrendingUp, Lock, HardDrive, AlertCircle, Zap, Clock, GitBranch, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
 import { LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, ComposedChart } from 'recharts';
 import { getAgents, getLatestMetrics } from '@/lib/api';
 import { formatBytes, extractMetric } from '@/lib/metrics-utils';
-import { Agent, LatestMetrics } from '@/types';
+import { Agent, LatestMetrics, Metric } from '@/types';
+import { useMetricsWebSocket } from '@/hooks/useWebSocket';
+import { WsMetricMessage, WsAgentSnapshot, WsMetricSnapshot } from '@/lib/websocket';
 
 export default function DatabaseDetailPage() {
   const params = useParams();
@@ -20,65 +22,156 @@ export default function DatabaseDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Ref to track current metrics for building historical data
+  const metricsRef = useRef<LatestMetrics | null>(null);
   useEffect(() => {
-    let isInitialLoad = true;
+    metricsRef.current = metrics;
+  }, [metrics]);
 
-    const fetchData = async () => {
-      try {
-        if (isInitialLoad) {
-          setLoading(true);
-        }
-        
-        const agents = await getAgents();
-        const foundAgent = agents.find(a => a.id === agentId);
-
-        if (!foundAgent) {
-          setError('Database not found');
-          return;
-        }
-
-        setAgent(foundAgent);
-
-        const metricsData = await getLatestMetrics(agentId);
-        setMetrics(metricsData);
-
-        // Build historical data from metrics
-        if (metricsData) {
-          const timestamp = new Date().toLocaleTimeString();
-          const dataPoint = {
-            time: timestamp,
-            active: extractMetric(metricsData.metrics, 'db_connections_active'),
-            idle: extractMetric(metricsData.metrics, 'db_connections_idle'),
-            cacheHit: extractMetric(metricsData.metrics, 'db_cache_hit_ratio'),
-            qps: extractMetric(metricsData.metrics, 'db_queries_per_second'),
-            locks: extractMetric(metricsData.metrics, 'db_locks_waiting'),
-            slowQueries: extractMetric(metricsData.metrics, 'db_slow_queries'),
-            committed: extractMetric(metricsData.metrics, 'db_transactions_committed'),
-            rolledBack: extractMetric(metricsData.metrics, 'db_transactions_rolled_back'),
-            sizeGB: extractMetric(metricsData.metrics, 'db_database_size_bytes') / (1024 ** 3),
-          };
-
-          setHistoricalData(prev => {
-            const updated = [...prev, dataPoint];
-            return updated.slice(-30); // Keep last 30 points
-          });
-        }
-
-        setError(null);
-      } catch {
-        setError('Failed to load database details');
-      } finally {
-        if (isInitialLoad) {
-          setLoading(false);
-          isInitialLoad = false;
-        }
-      }
+  // Helper to add a data point to historical data
+  const addHistoricalDataPoint = useCallback((metricsData: LatestMetrics) => {
+    const timestamp = new Date().toLocaleTimeString();
+    const dataPoint = {
+      time: timestamp,
+      active: extractMetric(metricsData.metrics, 'db_connections_active'),
+      idle: extractMetric(metricsData.metrics, 'db_connections_idle'),
+      cacheHit: extractMetric(metricsData.metrics, 'db_cache_hit_ratio'),
+      qps: extractMetric(metricsData.metrics, 'db_queries_per_second'),
+      locks: extractMetric(metricsData.metrics, 'db_locks_waiting'),
+      slowQueries: extractMetric(metricsData.metrics, 'db_slow_queries'),
+      committed: extractMetric(metricsData.metrics, 'db_transactions_committed'),
+      rolledBack: extractMetric(metricsData.metrics, 'db_transactions_rolled_back'),
+      sizeGB: extractMetric(metricsData.metrics, 'db_database_size_bytes') / (1024 ** 3),
     };
 
-    if (agentId) {
-      fetchData(); // Initial load only - consider adding WebSocket for real-time updates
+    setHistoricalData(prev => {
+      const updated = [...prev, dataPoint];
+      return updated.slice(-30); // Keep last 30 points
+    });
+  }, []);
+
+  // Handle initial state from WebSocket
+  const handleInitialState = useCallback((agents: WsAgentSnapshot[], wsMetrics: WsMetricSnapshot[]) => {
+    // Find our agent
+    const foundAgent = agents.find(a => a.id === agentId);
+    if (foundAgent) {
+      setAgent({
+        id: foundAgent.id,
+        name: foundAgent.name,
+        status: foundAgent.status as 'Healthy' | 'Degraded' | 'Unreachable',
+        last_seen: foundAgent.last_seen,
+      });
     }
-  }, [agentId]);
+
+    // Get metrics for this agent
+    const agentMetrics = wsMetrics
+      .filter(m => m.agent_id === agentId)
+      .map(m => ({
+        name: m.metric_name,
+        value: m.latest_value,
+        timestamp: m.timestamp,
+      }));
+
+    if (agentMetrics.length > 0) {
+      const metricsData: LatestMetrics = {
+        agent_id: agentId,
+        metrics: agentMetrics,
+        timestamp: agentMetrics[0]?.timestamp,
+      };
+      setMetrics(metricsData);
+      addHistoricalDataPoint(metricsData);
+    }
+
+    setLoading(false);
+  }, [agentId, addHistoricalDataPoint]);
+
+  // Handle real-time metric updates from WebSocket
+  const handleMetricUpdate = useCallback((metricMessage: WsMetricMessage) => {
+    // Only process metrics for this agent
+    if (metricMessage.agent_id !== agentId) return;
+
+    const metricName = metricMessage.metric_name;
+    const metricValue = metricMessage.value;
+    const timestamp = metricMessage.timestamp;
+
+    // Only process db_ metrics
+    if (!metricName.startsWith('db_')) return;
+
+    // Update metrics state
+    setMetrics(prev => {
+      if (!prev) {
+        return {
+          agent_id: agentId,
+          metrics: [{ name: metricName, value: metricValue, timestamp }],
+          timestamp,
+        };
+      }
+
+      const existingIndex = prev.metrics.findIndex(m => m.name === metricName);
+      let updatedMetrics: Metric[];
+
+      if (existingIndex >= 0) {
+        updatedMetrics = prev.metrics.map(m =>
+          m.name === metricName ? { ...m, value: metricValue, timestamp } : m
+        );
+      } else {
+        updatedMetrics = [...prev.metrics, { name: metricName, value: metricValue, timestamp }];
+      }
+
+      const newMetricsData = {
+        ...prev,
+        metrics: updatedMetrics,
+        timestamp,
+      };
+
+      // Add historical data point on each update
+      addHistoricalDataPoint(newMetricsData);
+
+      return newMetricsData;
+    });
+  }, [agentId, addHistoricalDataPoint]);
+
+  // Connect to WebSocket for real-time updates
+  useMetricsWebSocket({
+    onMetric: handleMetricUpdate,
+    onInitialState: handleInitialState,
+  });
+
+  // Fallback: fetch via HTTP if WebSocket doesn't provide data quickly
+  useEffect(() => {
+    const timeout = setTimeout(async () => {
+      if (loading && !metrics) {
+        console.log('[DatabaseDetailPage] Fallback: fetching via HTTP');
+        try {
+          const agents = await getAgents();
+          const foundAgent = agents.find(a => a.id === agentId);
+
+          if (!foundAgent) {
+            setError('Database not found');
+            setLoading(false);
+            return;
+          }
+
+          setAgent(foundAgent);
+
+          const metricsData = await getLatestMetrics(agentId);
+          setMetrics(metricsData);
+
+          if (metricsData) {
+            addHistoricalDataPoint(metricsData);
+          }
+
+          setError(null);
+        } catch {
+          setError('Failed to load database details');
+        } finally {
+          setLoading(false);
+        }
+      }
+    }, 2000);
+
+    return () => clearTimeout(timeout);
+  }, [agentId, loading, metrics, addHistoricalDataPoint]);
 
   if (loading) {
     return (

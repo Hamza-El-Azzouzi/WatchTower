@@ -1,72 +1,163 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { Database, Activity, HardDrive, Lock, TrendingUp } from 'lucide-react';
 import { getAgents, getLatestMetrics } from '@/lib/api';
 import { formatBytes, extractMetric } from '@/lib/metrics-utils';
-import { Agent, LatestMetrics, DatabaseAgent } from '@/types';
+import { Agent, LatestMetrics, DatabaseAgent, Metric } from '@/types';
 import { useMetricsWebSocket } from '@/hooks/useWebSocket';
-import { WsMetricMessage } from '@/lib/websocket';
+import { WsMetricMessage, WsAgentSnapshot, WsMetricSnapshot } from '@/lib/websocket';
 
 export default function DatabasesPage() {
   const [dbAgents, setDbAgents] = useState<DatabaseAgent[]>([]);
   const [loading, setLoading] = useState(true);
+  const dbAgentsRef = useRef<DatabaseAgent[]>([]);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    dbAgentsRef.current = dbAgents;
+  }, [dbAgents]);
+
+  // Handle initial state from WebSocket
+  const handleInitialState = useCallback((agents: WsAgentSnapshot[], metrics: WsMetricSnapshot[]) => {
+    console.log('[DatabasesPage] Received initial state:', agents.length, 'agents,', metrics.length, 'metrics');
+    
+    // Group metrics by agent and filter for db_ metrics
+    const agentMetricsMap = new Map<string, Metric[]>();
+    const agentInfoMap = new Map<string, WsAgentSnapshot>();
+    
+    agents.forEach(agent => {
+      agentInfoMap.set(agent.id, agent);
+    });
+    
+    metrics.forEach(m => {
+      if (m.metric_name.startsWith('db_')) {
+        const existing = agentMetricsMap.get(m.agent_id) || [];
+        existing.push({
+          name: m.metric_name,
+          value: m.latest_value,
+          timestamp: m.timestamp,
+        });
+        agentMetricsMap.set(m.agent_id, existing);
+      }
+    });
+    
+    // Build DatabaseAgent array for agents with db_ metrics
+    const dbAgentsList: DatabaseAgent[] = [];
+    agentMetricsMap.forEach((agentMetrics, agentId) => {
+      const agentInfo = agentInfoMap.get(agentId);
+      if (agentInfo && agentMetrics.length > 0) {
+        dbAgentsList.push({
+          agent: {
+            id: agentInfo.id,
+            name: agentInfo.name,
+            status: agentInfo.status as 'Healthy' | 'Degraded' | 'Unreachable',
+            last_seen: agentInfo.last_seen,
+          },
+          metrics: {
+            agent_id: agentId,
+            metrics: agentMetrics,
+            timestamp: agentMetrics[0]?.timestamp,
+          },
+        });
+      }
+    });
+    
+    setDbAgents(dbAgentsList);
+    setLoading(false);
+  }, []);
 
   // WebSocket handler for real-time metric updates
   const handleMetricUpdate = useCallback((metricMessage: WsMetricMessage) => {
-    const agentId = metricMessage.Metric.agent_id
-    const metricName = metricMessage.Metric.name
-    const metricValue = metricMessage.Metric.value
+    const agentId = metricMessage.agent_id;
+    const metricName = metricMessage.metric_name;
+    const metricValue = metricMessage.value;
+    const timestamp = metricMessage.timestamp;
 
-    setDbAgents(prev => prev.map(dbAgent => {
-      if (dbAgent.agent.agent_id === agentId) {
-        return {
-          ...dbAgent,
-          metrics: {
-            ...dbAgent.metrics,
-            metrics: dbAgent.metrics.metrics.map(m =>
-              m.name === metricName ? { ...m, value: metricValue } : m
-            )
+    // Only process db_ metrics
+    if (!metricName.startsWith('db_')) {
+      return;
+    }
+
+    setDbAgents(prev => {
+      // Check if this agent already exists
+      const existingAgentIndex = prev.findIndex(da => da.agent.id === agentId);
+      
+      if (existingAgentIndex >= 0) {
+        // Update existing agent's metrics
+        return prev.map(dbAgent => {
+          if (dbAgent.agent.id !== agentId) return dbAgent;
+          
+          const existingMetrics = dbAgent.metrics?.metrics || [];
+          const metricIndex = existingMetrics.findIndex(m => m.name === metricName);
+          
+          let updatedMetrics: Metric[];
+          if (metricIndex >= 0) {
+            // Update existing metric
+            updatedMetrics = existingMetrics.map(m =>
+              m.name === metricName ? { ...m, value: metricValue, timestamp } : m
+            );
+          } else {
+            // Add new metric
+            updatedMetrics = [...existingMetrics, { name: metricName, value: metricValue, timestamp }];
           }
+          
+          return {
+            ...dbAgent,
+            metrics: {
+              agent_id: agentId,
+              metrics: updatedMetrics,
+              timestamp,
+            },
+          };
+        });
+      }
+      
+      // Agent doesn't exist yet - we'll need to add it when we get agent info
+      // For now, just return prev (the initial state should have agent info)
+      return prev;
+    });
+  }, []);
+
+  // Connect to WebSocket with both handlers
+  useMetricsWebSocket({
+    onMetric: handleMetricUpdate,
+    onInitialState: handleInitialState,
+  });
+
+  // Fallback: fetch data via HTTP if WebSocket doesn't provide initial state quickly
+  useEffect(() => {
+    const timeout = setTimeout(async () => {
+      if (loading && dbAgents.length === 0) {
+        console.log('[DatabasesPage] Fallback: fetching via HTTP');
+        try {
+          const agents = await getAgents();
+          
+          const agentsWithMetrics = await Promise.all(
+            agents.map(async (agent) => {
+              try {
+                const metrics = await getLatestMetrics(agent.id);
+                const hasDbMetrics = metrics.metrics.some(m => m.name.startsWith('db_'));
+                return hasDbMetrics ? { agent, metrics } : null;
+              } catch {
+                return null;
+              }
+            })
+          );
+
+          const filteredAgents = agentsWithMetrics.filter((a): a is NonNullable<typeof a> => a !== null) as DatabaseAgent[];
+          setDbAgents(filteredAgents);
+        } catch (error) {
+          console.error('Failed to fetch database agents:', error);
+        } finally {
+          setLoading(false);
         }
       }
-      return dbAgent
-    }))
-  }, [])
+    }, 2000); // Wait 2 seconds for WebSocket before falling back to HTTP
 
-  useMetricsWebSocket(handleMetricUpdate)
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const agents = await getAgents();
-        
-        // Fetch metrics for all agents to check which have database metrics
-        const agentsWithMetrics = await Promise.all(
-          agents.map(async (agent) => {
-            try {
-              const metrics = await getLatestMetrics(agent.id);
-              // Check if agent has database metrics (metrics starting with db_)
-              const hasDbMetrics = metrics.metrics.some(m => m.name.startsWith('db_'));
-              return hasDbMetrics ? { agent, metrics } : null;
-            } catch {
-              return null;
-            }
-          })
-        );
-
-        const filteredAgents = agentsWithMetrics.filter((a): a is NonNullable<typeof a> => a !== null) as DatabaseAgent[];
-        setDbAgents(filteredAgents);
-      } catch (error) {
-        console.error('Failed to fetch database agents:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData(); // Initial load only, WebSocket handles updates
-  }, []);
+    return () => clearTimeout(timeout);
+  }, [loading, dbAgents.length]);
 
   if (loading) {
     return (

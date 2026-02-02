@@ -12,8 +12,8 @@ collect_network = true
 
 [server]
 enabled = true
-url = "http://server.url"
-api_key = "api_key_id"  # Get from admin dashboard: http://localhost:3000/admin/api-keys
+url = "http://10.1.17.1:8080"
+api_key = "msk_RUQ2N4K0DrHjKicu8F0SOxpu-MUZPWhkOh5eSOsCOvQ"  # Get from admin dashboard: http://localhost:3000/admin/api-keys
 retry_attempts = 3
 retry_delay_seconds = 2
 
