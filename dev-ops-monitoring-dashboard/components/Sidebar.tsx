@@ -19,9 +19,9 @@ export function Sidebar() {
   // WebSocket handler for real-time alert updates
   const handleAlertUpdate = useCallback((alertMessage: WsAlertMessage) => {
     // Update alert count based on WebSocket messages
-    if (alertMessage.Alert && (alertMessage.Alert.state === 'firing' || alertMessage.Alert.state === 'pending')) {
+    if (alertMessage.state === 'firing' || alertMessage.state === 'pending') {
       setAlertCount(prev => prev + 1)
-    } else if (alertMessage.Alert && alertMessage.Alert.state === 'resolved') {
+    } else if (alertMessage.state === 'resolved') {
       setAlertCount(prev => Math.max(0, prev - 1))
     }
   }, [])

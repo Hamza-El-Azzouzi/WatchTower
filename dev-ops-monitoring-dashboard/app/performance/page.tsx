@@ -6,22 +6,12 @@ import { Zap, TrendingUp, TrendingDown, Activity, Server, AlertTriangle, Wifi } 
 import Link from 'next/link';
 import { useMetricsWebSocket } from '@/hooks/useWebSocket';
 import { WsMetricMessage } from '@/lib/websocket';
+import { getAgents, getLatestMetrics } from '@/lib/api';
 
 interface Agent {
-  agent_id: string;
-  hostname: string;
-  last_seen: number;
-}
-
-interface MetricPoint {
-  timestamp: number;
-  value: number;
-}
-
-interface ServerMetrics {
-  cpu_usage: MetricPoint[];
-  memory_usage: MetricPoint[];
-  disk_usage: MetricPoint[];
+  id: string;
+  name: string;
+  last_seen: string;
 }
 
 interface AgentPerformance {
@@ -72,15 +62,14 @@ function getStatusIcon(status: string) {
 
 export default function PerformancePage() {
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [metricsMap, setMetricsMap] = useState<Map<string, ServerMetrics>>(new Map());
   const [performances, setPerformances] = useState<AgentPerformance[]>([]);
   const [loading, setLoading] = useState(true);
 
   // WebSocket handler for real-time performance updates
   const handleMetricUpdate = useCallback((metricMessage: WsMetricMessage) => {
-    const agentId = metricMessage.Metric.agent_id;
-    const metricName = metricMessage.Metric.metric_name;
-    const value = metricMessage.Metric.value;
+    const agentId = metricMessage.agent_id;
+    const metricName = metricMessage.metric_name;
+    const value = metricMessage.value;
 
     setPerformances(prev => prev.map(perf => {
       if (perf.agent_id !== agentId) return perf;
@@ -102,31 +91,26 @@ export default function PerformancePage() {
   const fetchData = async () => {
     try {
       // Fetch agents
-      const agentsRes = await fetch('/api/v1/agents');
-      const agentsData: Agent[] = await agentsRes.json();
+      const agentsData: Agent[] = await getAgents();
       setAgents(agentsData);
 
       // Fetch metrics for each agent
-      const newMetricsMap = new Map<string, ServerMetrics>();
       const performanceList: AgentPerformance[] = [];
 
       for (const agent of agentsData) {
         try {
-          const metricsRes = await fetch(`/api/v1/metrics/${agent.agent_id}?limit=1`);
-          const metrics: ServerMetrics = await metricsRes.json();
-          newMetricsMap.set(agent.agent_id, metrics);
-
-          // Get latest values
-          const cpu = metrics.cpu_usage[metrics.cpu_usage.length - 1]?.value || 0;
-          const memory = metrics.memory_usage[metrics.memory_usage.length - 1]?.value || 0;
-          const disk = metrics.disk_usage[metrics.disk_usage.length - 1]?.value || 0;
+          const latest = await getLatestMetrics(agent.id);
+          const valueOf = (name: string) => latest.metrics.find(metric => metric.name === name)?.value || 0;
+          const cpu = valueOf('cpu_usage');
+          const memory = valueOf('memory_usage');
+          const disk = valueOf('disk_usage');
 
           const score = calculatePerformanceScore(cpu, memory, disk);
           const status = getStatusFromScore(score);
 
           performanceList.push({
-            agent_id: agent.agent_id,
-            hostname: agent.hostname,
+            agent_id: agent.id,
+            hostname: agent.name,
             cpu,
             memory,
             disk,
@@ -134,14 +118,13 @@ export default function PerformancePage() {
             status,
           });
         } catch (err) {
-          console.error(`Failed to fetch metrics for ${agent.agent_id}:`, err);
+          console.error(`Failed to fetch metrics for ${agent.id}:`, err);
         }
       }
 
       // Sort by score (worst first for attention)
       performanceList.sort((a, b) => a.score - b.score);
 
-      setMetricsMap(newMetricsMap);
       setPerformances(performanceList);
       setLoading(false);
     } catch (error) {

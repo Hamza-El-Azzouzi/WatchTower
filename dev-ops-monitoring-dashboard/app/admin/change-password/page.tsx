@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Lock, AlertCircle, CheckCircle } from 'lucide-react'
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+
 export default function ChangePasswordPage() {
   const router = useRouter()
   const [formData, setFormData] = useState({
@@ -41,7 +43,7 @@ export default function ChangePasswordPage() {
 
     try {
       const adminToken = localStorage.getItem('admin_token')
-      const response = await fetch('http://localhost:8080/api/v1/admin/change-password', {
+      const response = await fetch(`${API_BASE_URL}/api/v1/admin/change-password`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

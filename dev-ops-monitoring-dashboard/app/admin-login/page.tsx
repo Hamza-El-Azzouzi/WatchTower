@@ -130,11 +130,9 @@ export default function AdminLoginPage() {
           </div>
         </div>
 
-        {/* Info */}
-        <div className="mt-6 text-center text-xs text-muted-foreground">
-          <p>Default credentials: admin / admin123</p>
-          <p className="mt-1">(Change password after first login)</p>
-        </div>
+        <p className="mt-6 text-center text-xs text-muted-foreground">
+          The first administrator is configured by the server operator.
+        </p>
       </div>
     </div>
   )

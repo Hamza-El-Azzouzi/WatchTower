@@ -13,7 +13,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const adminToken = localStorage.getItem('admin_token')
     
     // Public routes (no authentication required)
-    const publicRoutes = ['/login', '/admin-login', '/request', '/ws-test']
+    const publicRoutes = ['/login', '/admin-login', '/request']
     
     if (publicRoutes.includes(pathname)) {
       return

@@ -346,6 +346,18 @@ impl Database {
         Ok(rows.into_iter().map(|row| row.get("id")).collect())
     }
 
+    /// Check ownership without loading metrics or exposing another tenant's agent.
+    pub async fn agent_belongs_to_api_key(&self, agent_id: &str, api_key_id: i64) -> Result<bool> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM agents WHERE id = $1 AND api_key_id = $2)",
+        )
+        .bind(agent_id)
+        .bind(api_key_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(Into::into)
+    }
+
     /// Register or update agent in database
     pub async fn register_agent(
         &self,
@@ -361,7 +373,7 @@ impl Database {
             VALUES ($1, $1, 'server', $2, $3, $4, NOW())
             ON CONFLICT (id)
             DO UPDATE SET
-                api_key_id = COALESCE(EXCLUDED.api_key_id, agents.api_key_id),
+                api_key_id = COALESCE(agents.api_key_id, EXCLUDED.api_key_id),
                 hostname = COALESCE(EXCLUDED.hostname, agents.hostname),
                 os = COALESCE(EXCLUDED.os, agents.os),
                 last_seen = NOW()

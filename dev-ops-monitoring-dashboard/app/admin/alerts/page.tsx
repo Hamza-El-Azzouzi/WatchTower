@@ -248,7 +248,7 @@ export default function AdminAlertsPage() {
                         </span>
                       </td>
                       <td className="py-4 px-6 text-sm text-muted-foreground">
-                        {formatDate(alert.fired_at)}
+                        {formatDate(alert.triggered_at)}
                       </td>
                     </tr>
                   ))

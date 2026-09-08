@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import { Users, Plus, UserCheck, UserX, AlertCircle, Loader2 } from 'lucide-react'
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+
 interface AdminUser {
   id: number
   username: string
@@ -33,7 +35,7 @@ export default function ManageAdminsPage() {
   const fetchAdmins = async () => {
     try {
       const adminToken = localStorage.getItem('admin_token')
-      const response = await fetch('http://localhost:8080/api/v1/admin/users', {
+      const response = await fetch(`${API_BASE_URL}/api/v1/admin/users`, {
         headers: {
           'X-Admin-Token': adminToken || '',
         },
@@ -59,7 +61,7 @@ export default function ManageAdminsPage() {
 
     try {
       const adminToken = localStorage.getItem('admin_token')
-      const response = await fetch('http://localhost:8080/api/v1/admin/users', {
+      const response = await fetch(`${API_BASE_URL}/api/v1/admin/users`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -88,7 +90,7 @@ export default function ManageAdminsPage() {
     
     try {
       const adminToken = localStorage.getItem('admin_token')
-      const response = await fetch(`http://localhost:8080/api/v1/admin/users/${username}/${endpoint}`, {
+      const response = await fetch(`${API_BASE_URL}/api/v1/admin/users/${username}/${endpoint}`, {
         method: 'POST',
         headers: {
           'X-Admin-Token': adminToken || '',

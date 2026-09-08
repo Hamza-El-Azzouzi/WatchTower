@@ -53,11 +53,11 @@ export default function LogsPage() {
   const handleLogMessage = useCallback((message: WsLogMessage) => {
     const newLog: LogEntry = {
       id: Date.now(), // Generate a temporary ID
-      agent_id: message.Log.agent_id,
-      timestamp: message.Log.timestamp,
-      level: message.Log.level.toUpperCase() as LogLevel,
+      agent_id: message.agent_id,
+      timestamp: message.timestamp,
+      level: message.level.toUpperCase() as LogLevel,
       source: 'websocket',
-      message: message.Log.message
+      message: message.message
     };
     
     // Apply filters

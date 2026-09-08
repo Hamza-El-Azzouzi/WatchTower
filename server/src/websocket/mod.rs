@@ -15,6 +15,62 @@ use tracing::{error, info, warn};
 
 use crate::storage::{Agent, DataPoint, TimeSeriesStore};
 
+#[derive(Clone)]
+enum AccessScope {
+    Admin,
+    Tenant(Vec<String>),
+}
+
+impl AccessScope {
+    fn allows(&self, agent_id: &str) -> bool {
+        match self {
+            Self::Admin => true,
+            Self::Tenant(agent_ids) => agent_ids.iter().any(|id| id == agent_id),
+        }
+    }
+
+    fn allows_message(&self, message: &WsMessage) -> bool {
+        match message {
+            WsMessage::Metric { agent_id, .. }
+            | WsMessage::Log { agent_id, .. }
+            | WsMessage::Alert { agent_id, .. }
+            | WsMessage::HistoricalMetrics { agent_id, .. } => self.allows(agent_id),
+            WsMessage::Heartbeat | WsMessage::InitialState { .. } => true,
+        }
+    }
+}
+
+async fn authenticate_socket(
+    socket: &mut WebSocket,
+    state: &crate::api::AppState,
+) -> Option<AccessScope> {
+    let received = tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv())
+        .await
+        .ok()?;
+    let message = received?.ok()?;
+    let Message::Text(text) = message else {
+        return None;
+    };
+    let payload: serde_json::Value = serde_json::from_str(&text).ok()?;
+    if payload.get("type")?.as_str()? != "authenticate" {
+        return None;
+    }
+    let token = payload.get("token")?.as_str()?;
+    let auth = state.auth_service.as_ref()?;
+
+    if auth.validate_admin_token(token).await.ok().flatten().is_some() {
+        return Some(AccessScope::Admin);
+    }
+    let key_id = auth.validate_api_key(token).await.ok().flatten()?;
+    let agent_ids = state
+        .database
+        .as_ref()?
+        .get_agents_by_api_key(key_id)
+        .await
+        .ok()?;
+    Some(AccessScope::Tenant(agent_ids))
+}
+
 // WebSocket message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -144,23 +200,26 @@ pub async fn ws_metrics_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<crate::api::AppState>>,
 ) -> Response {
-    let ws_manager = state.ws_manager.clone();
-    let store = state.store.clone();
-    ws.on_upgrade(|socket| handle_metrics_socket(socket, ws_manager, store))
+    ws.on_upgrade(|socket| handle_metrics_socket(socket, state))
 }
 
 async fn handle_metrics_socket(
-    socket: WebSocket,
-    ws_manager: Arc<WebSocketManager>,
-    store: TimeSeriesStore,
+    mut socket: WebSocket,
+    state: Arc<crate::api::AppState>,
 ) {
+    let Some(scope) = authenticate_socket(&mut socket, &state).await else {
+        warn!("Rejected unauthenticated metrics WebSocket");
+        return;
+    };
+    let ws_manager = state.ws_manager.clone();
+    let store = state.store.clone();
     let (mut sender, mut receiver) = socket.split();
     let mut rx = ws_manager.metrics_tx.subscribe();
 
     info!("New WebSocket connection for metrics - sending initial state");
 
     // Send initial state snapshot immediately on connect
-    let initial_state = build_initial_state(&store);
+    let initial_state = build_initial_state(&store, &scope);
     if let Ok(json) = serde_json::to_string(&initial_state) {
         if sender.send(Message::Text(json)).await.is_err() {
             error!("Failed to send initial state");
@@ -194,6 +253,9 @@ async fn handle_metrics_socket(
                 msg = rx.recv() => {
                     match msg {
                         Ok(msg) => {
+                            if !scope.allows_message(&msg) {
+                                continue;
+                            }
                             if let Ok(json) = serde_json::to_string(&msg) {
                                 if sender.send(Message::Text(json)).await.is_err() {
                                     break;
@@ -229,8 +291,12 @@ async fn handle_metrics_socket(
 }
 
 // Build initial state snapshot from store
-fn build_initial_state(store: &TimeSeriesStore) -> WsMessage {
-    let agents = store.get_agents();
+fn build_initial_state(store: &TimeSeriesStore, scope: &AccessScope) -> WsMessage {
+    let agents: Vec<_> = store
+        .get_agents()
+        .into_iter()
+        .filter(|agent| scope.allows(&agent.id))
+        .collect();
     let agent_snapshots: Vec<AgentSnapshot> = agents.iter().map(|a| a.into()).collect();
     let mut metric_snapshots: Vec<MetricSnapshot> = Vec::new();
 
@@ -260,11 +326,15 @@ pub async fn ws_logs_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<crate::api::AppState>>,
 ) -> Response {
-    let ws_manager = state.ws_manager.clone();
-    ws.on_upgrade(|socket| handle_logs_socket(socket, ws_manager))
+    ws.on_upgrade(|socket| handle_logs_socket(socket, state))
 }
 
-async fn handle_logs_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>) {
+async fn handle_logs_socket(mut socket: WebSocket, state: Arc<crate::api::AppState>) {
+    let Some(scope) = authenticate_socket(&mut socket, &state).await else {
+        warn!("Rejected unauthenticated logs WebSocket");
+        return;
+    };
+    let ws_manager = state.ws_manager.clone();
     let (mut sender, mut receiver) = socket.split();
     let mut rx = ws_manager.logs_tx.subscribe();
 
@@ -286,6 +356,9 @@ async fn handle_logs_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>
                 msg = rx.recv() => {
                     match msg {
                         Ok(msg) => {
+                            if !scope.allows_message(&msg) {
+                                continue;
+                            }
                             if let Ok(json) = serde_json::to_string(&msg) {
                                 if sender.send(Message::Text(json)).await.is_err() {
                                     break;
@@ -323,11 +396,15 @@ pub async fn ws_alerts_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<crate::api::AppState>>,
 ) -> Response {
-    let ws_manager = state.ws_manager.clone();
-    ws.on_upgrade(|socket| handle_alerts_socket(socket, ws_manager))
+    ws.on_upgrade(|socket| handle_alerts_socket(socket, state))
 }
 
-async fn handle_alerts_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>) {
+async fn handle_alerts_socket(mut socket: WebSocket, state: Arc<crate::api::AppState>) {
+    let Some(scope) = authenticate_socket(&mut socket, &state).await else {
+        warn!("Rejected unauthenticated alerts WebSocket");
+        return;
+    };
+    let ws_manager = state.ws_manager.clone();
     let (mut sender, mut receiver) = socket.split();
     let mut rx = ws_manager.alerts_tx.subscribe();
 
@@ -349,6 +426,9 @@ async fn handle_alerts_socket(socket: WebSocket, ws_manager: Arc<WebSocketManage
                 msg = rx.recv() => {
                     match msg {
                         Ok(msg) => {
+                            if !scope.allows_message(&msg) {
+                                continue;
+                            }
                             if let Ok(json) = serde_json::to_string(&msg) {
                                 if sender.send(Message::Text(json)).await.is_err() {
                                     break;

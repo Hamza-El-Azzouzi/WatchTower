@@ -196,10 +196,12 @@ git clone https://github.com/yourusername/devops-monitoring-system.git
 cd devops-monitoring-system
 ```
 
-**2. Start the full stack with Docker Compose**
+**2. Configure local secrets and start the stack**
 
 ```bash
-docker-compose up -d
+cp .env.example .env
+# Replace the placeholder passwords and signing secret in .env first.
+docker compose up -d
 ```
 
 This starts:
@@ -215,16 +217,17 @@ open http://localhost:3000
 
 **4. Generate an API key**
 
-Navigate to the admin dashboard at `http://localhost:3000/admin-login` (default: no auth required in dev mode) or use the API:
+Sign in at `http://localhost:3000/admin-login` with the bootstrap administrator configured in `.env`. API keys are displayed only once when created and are stored as hashes by the server.
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/auth/keys \
+# Or create a key through the authenticated admin API:
+ADMIN_TOKEN=$(curl -fsS -X POST http://localhost:8080/api/v1/admin/login \
   -H "Content-Type: application/json" \
-  -d '{
-    "name": "production-agents",
-    "max_agents": 10,
-    "expires_in_days": 90
-  }'
+  -d '{"username":"admin","password":"YOUR_BOOTSTRAP_PASSWORD"}' | jq -r .token)
+curl -fsS -X POST http://localhost:8080/api/v1/auth/keys \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -d '{"name":"production-agents","max_agents":10,"expires_in_days":90}'
 ```
 
 **5. Start a monitoring agent**

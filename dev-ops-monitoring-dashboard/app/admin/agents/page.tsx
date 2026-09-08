@@ -9,9 +9,9 @@ import Link from 'next/link'
 
 interface Agent {
   id: string
-  agent_id: string
+  agent_id?: string
   name: string
-  agent_type: string
+  agent_type?: string
   status: string
   last_seen: string
   api_key_id?: number

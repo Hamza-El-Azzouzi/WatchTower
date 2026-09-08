@@ -14,6 +14,7 @@ export default function AlertsPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'active' | 'history' | 'rules'>('active');
   const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Handle real-time alert updates via WebSocket
   const handleAlertMessage = useCallback((message: WsAlertMessage) => {
@@ -25,15 +26,15 @@ export default function AlertsPage() {
 
   // Initial load and when filters change
   useEffect(() => {
+    setIsAdmin(localStorage.getItem('user_type') === 'admin');
     fetchData();
   }, []);
 
   const fetchData = async () => {
     try {
-      const [alertsData, rulesData] = await Promise.all([
-        getAlerts(),
-        getAlertRules(),
-      ]);
+      const isAdmin = localStorage.getItem('user_type') === 'admin';
+      const alertsData = await getAlerts();
+      const rulesData = isAdmin ? await getAlertRules() : { rules: [], total: 0 };
       
       const allAlerts = [...alertsData.active_alerts, ...alertsData.recent_alerts];
       setAlerts(allAlerts);
@@ -83,24 +84,26 @@ export default function AlertsPage() {
           </div>
           <p className="text-muted-foreground">Monitor and manage system alerts</p>
         </div>
-        <Link
-          href="/alerts/rules/new"
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          New Alert Rule
-        </Link>
+        {isAdmin && (
+          <Link
+            href="/alerts/rules/new"
+            className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            New Alert Rule
+          </Link>
+        )}
       </div>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <div className="glass-morphism rounded-xl p-4">
+        {isAdmin && <div className="glass-morphism rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2">
             <AlertTriangle className="w-5 h-5 text-red-400" />
             <span className="text-sm text-muted-foreground">Firing</span>
           </div>
           <div className="text-3xl font-bold text-red-400">{activeAlerts.length}</div>
-        </div>
+        </div>}
         
         <div className="glass-morphism rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -129,7 +132,7 @@ export default function AlertsPage() {
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6 border-b border-gray-700">
-        <button
+        {isAdmin && <button
           onClick={() => setActiveTab('active')}
           className={`px-4 py-2 font-medium transition-colors ${
             activeTab === 'active'
@@ -138,7 +141,7 @@ export default function AlertsPage() {
           }`}
         >
           Active ({activeAlerts.length + pendingAlerts.length})
-        </button>
+        </button>}
         <button
           onClick={() => setActiveTab('history')}
           className={`px-4 py-2 font-medium transition-colors ${

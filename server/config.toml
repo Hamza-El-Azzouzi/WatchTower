@@ -30,7 +30,7 @@ check_interval_seconds = 30
 
 [database]
 enabled = true
-url = "postgresql://monitoring_user:monitoring_password@localhost:5432/monitoring"
+url = "postgresql://monitoring_user:REPLACE_ME@localhost:5432/monitoring"
 
 [auth]
 enabled = true

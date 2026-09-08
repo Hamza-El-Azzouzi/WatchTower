@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Key, Lock, AlertCircle, Loader } from 'lucide-react'
 
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+
 export default function LoginPage() {
   const router = useRouter()
   const [apiKey, setApiKey] = useState('')
@@ -17,7 +19,7 @@ export default function LoginPage() {
 
     try {
       // Validate the API key using the validation endpoint
-      const response = await fetch('http://localhost:8080/api/v1/auth/validate', {
+      const response = await fetch(`${API_BASE_URL}/api/v1/auth/validate`, {
         headers: {
           'X-API-Key': apiKey
         }
@@ -42,7 +44,7 @@ export default function LoginPage() {
         setError('Unable to verify API key. Please ensure the server is running.')
       }
     } catch (err) {
-      setError('Connection error. Please ensure the API server is running at http://localhost:8080')
+      setError(`Connection error. Please ensure the API server is running at ${API_BASE_URL}`)
     } finally {
       setLoading(false)
     }

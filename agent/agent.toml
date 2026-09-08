@@ -13,7 +13,7 @@ collect_network = true
 [server]
 enabled = true
 url = "http://10.1.17.1:8080"
-api_key = "msk_RUQ2N4K0DrHjKicu8F0SOxpu-MUZPWhkOh5eSOsCOvQ"  # Get from admin dashboard: http://localhost:3000/admin/api-keys
+api_key = "msk_REPLACE_ME"  # Get from the WatchTower admin dashboard
 retry_attempts = 3
 retry_delay_seconds = 2
 
@@ -24,4 +24,4 @@ host = "localhost"
 port = 5432
 database = "monitoring"
 username = "monitoring_user"
-password = "monitoring_password"
+password = "REPLACE_ME"

@@ -69,9 +69,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8080
 ENV DATABASE_ENABLED=true
-ENV DATABASE_URL=postgresql://monitoring_user:monitoring_pass@postgres:5432/monitoring
 ENV AUTH_ENABLED=true
-ENV AUTH_REQUIRE_API_KEY=false
+ENV AUTH_REQUIRE_API_KEY=true
 
 # Volume for persistent data
 VOLUME ["/app/data"]

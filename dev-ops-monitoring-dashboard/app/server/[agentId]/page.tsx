@@ -34,7 +34,6 @@ export default function ServerDetailPage() {
     if (foundAgent) {
       setAgent({
         id: foundAgent.id,
-        agent_id: foundAgent.id,
         name: foundAgent.name,
         status: foundAgent.status as 'Healthy' | 'Degraded' | 'Unreachable',
         last_seen: foundAgent.last_seen,

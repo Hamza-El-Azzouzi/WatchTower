@@ -40,10 +40,9 @@ mysql_async = { version = "0.34", optional = true }
 serde_json = "1.0"
 
 [features]
-default = []
+default = ["postgres", "mysql"]
 postgres = ["tokio-postgres"]
 mysql = ["mysql_async"]
 all-databases = ["postgres", "mysql"]
 
 # JSON serialization
-

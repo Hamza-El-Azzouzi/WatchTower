@@ -12,3 +12,10 @@ export function getAuthHeaders(): HeadersInit {
   const apiKey = typeof window !== 'undefined' ? localStorage.getItem('api_key') : null
   return apiKey ? { 'X-API-Key': apiKey } : {}
 }
+
+export function getRealtimeToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return localStorage.getItem('user_type') === 'admin'
+    ? localStorage.getItem('admin_token')
+    : localStorage.getItem('api_key')
+}

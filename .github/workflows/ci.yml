@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  POSTGRES_PASSWORD: ci-only-database-password
+  ADMIN_JWT_SECRET: ci-only-signing-secret-with-more-than-32-bytes
+  BOOTSTRAP_ADMIN_PASSWORD: ci-only-admin-password
 
 jobs:
   test-server:
@@ -81,6 +84,10 @@ jobs:
       working-directory: ./agent
       run: cargo clippy -- -D warnings
 
+    - name: Check formatting
+      working-directory: ./agent
+      run: cargo fmt -- --check
+
   test-dashboard:
     name: Test Dashboard
     runs-on: ubuntu-latest
@@ -101,7 +108,7 @@ jobs:
     
     - name: Run linter
       working-directory: ./dev-ops-monitoring-dashboard
-      run: npm run lint || true
+      run: npm run lint
     
     - name: Build
       working-directory: ./dev-ops-monitoring-dashboard
@@ -163,13 +170,21 @@ jobs:
     - name: Test API health
       run: |
         curl -f http://localhost:8080/health
-        curl -f http://localhost:8080/api/v1/agents
-    
-    - name: Test metrics ingestion
+
+    - name: Test authenticated metrics flow
       run: |
-        curl -X POST http://localhost:8080/api/v1/metrics \
+        ADMIN_TOKEN=$(curl -fsS -X POST http://localhost:8080/api/v1/admin/login \
           -H "Content-Type: application/json" \
-          -d '{"agent_id": "ci-test", "metrics": [{"name": "cpu", "value": 50.0, "timestamp": "2026-01-28T10:00:00Z"}]}'
+          -d '{"username":"admin","password":"ci-only-admin-password"}' | jq -r .token)
+        API_KEY=$(curl -fsS -X POST http://localhost:8080/api/v1/auth/keys \
+          -H "Content-Type: application/json" \
+          -H "X-Admin-Token: $ADMIN_TOKEN" \
+          -d '{"name":"ci-agent","max_agents":1}' | jq -r .key)
+        curl -fsS -X POST http://localhost:8080/api/v1/metrics \
+          -H "Content-Type: application/json" \
+          -H "X-API-Key: $API_KEY" \
+          -d '{"agent_id":"ci-test","timestamp":"2026-01-28T10:00:00Z","metrics":{"cpu_usage":50.0}}'
+        curl -fsS http://localhost:8080/api/v1/agents -H "X-API-Key: $API_KEY"
     
     - name: Show logs on failure
       if: failure()

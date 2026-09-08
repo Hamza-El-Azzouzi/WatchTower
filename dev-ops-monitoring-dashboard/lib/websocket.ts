@@ -1,3 +1,5 @@
+import { getRealtimeToken } from './auth-utils';
+
 /**
  * WebSocket Manager for real-time updates
  * Handles connections to server WebSocket endpoints with automatic reconnection
@@ -144,6 +146,14 @@ export class WebSocketManager {
       this.ws = new WebSocket(this.url);
 
       this.ws.onopen = () => {
+        const token = getRealtimeToken();
+        if (!token) {
+          this.error("Cannot authenticate WebSocket: no active credential");
+          this.shouldReconnect = false;
+          this.ws?.close(1008, "Authentication required");
+          return;
+        }
+        this.ws?.send(JSON.stringify({ type: "authenticate", token }));
         this.log("Connected successfully");
         this.setState("connected");
         this.currentAttempt = 0;
@@ -261,11 +271,11 @@ export function createWebSocketManager(
   
   if (baseUrl) {
     wsUrl = baseUrl.replace(/^http/, 'ws');
+  } else if (process.env.NEXT_PUBLIC_WS_URL) {
+    wsUrl = process.env.NEXT_PUBLIC_WS_URL;
   } else if (typeof window !== 'undefined') {
-    // In browser: always use localhost:8080 for the API server
-    // The dashboard runs on :3000, API server on :8080
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    wsUrl = `${wsProtocol}//localhost:8080`;
+    wsUrl = `${wsProtocol}//${window.location.hostname}:8080`;
   } else {
     // Server-side: use environment variable or default
     wsUrl = 'ws://localhost:8080';
@@ -280,6 +290,6 @@ export function createWebSocketManager(
     reconnectDelay: 1000,
     maxReconnectDelay: 30000,
     reconnectAttempts: Infinity,
-    debug: true, // Always enable debug for now
+    debug: process.env.NODE_ENV === 'development',
   });
 }

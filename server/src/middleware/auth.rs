@@ -9,6 +9,12 @@ use std::sync::Arc;
 
 use crate::auth::AuthService;
 
+#[derive(Debug, Clone)]
+pub enum AuthenticatedPrincipal {
+    Admin { username: String },
+    ApiKey { key_id: i64 },
+}
+
 /// Extract API key from Authorization or X-API-Key header
 fn extract_api_key(headers: &HeaderMap) -> Option<String> {
     // Try X-API-Key header first (preferred for agents)
@@ -36,21 +42,25 @@ fn extract_admin_token(headers: &HeaderMap) -> Option<String> {
 pub async fn auth_middleware(
     State(auth_service): State<Arc<AuthService>>,
     headers: HeaderMap,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Result<Response, impl IntoResponse> {
     // First check for admin token via X-Admin-Token header
     if let Some(admin_token) = extract_admin_token(&headers) {
-        if admin_token.starts_with("admin_") && admin_token.len() > 10 {
-            // Valid admin token format - allow access
+        if let Ok(Some(admin)) = auth_service.validate_admin_token(&admin_token).await {
+            request.extensions_mut().insert(AuthenticatedPrincipal::Admin {
+                username: admin.username,
+            });
             return Ok(next.run(request).await);
         }
     }
 
     // Also check for admin token via Authorization: Bearer header
     if let Some(bearer_token) = extract_api_key(&headers) {
-        if bearer_token.starts_with("admin_") && bearer_token.len() > 10 {
-            // Valid admin token format via Bearer - allow access
+        if let Ok(Some(admin)) = auth_service.validate_admin_token(&bearer_token).await {
+            request.extensions_mut().insert(AuthenticatedPrincipal::Admin {
+                username: admin.username,
+            });
             return Ok(next.run(request).await);
         }
     }
@@ -79,7 +89,12 @@ pub async fn auth_middleware(
         .validate_api_key_with_agent(&api_key, agent_id.as_deref())
         .await
     {
-        Ok(Some(_)) => Ok(next.run(request).await),
+        Ok(Some(key_id)) => {
+            request
+                .extensions_mut()
+                .insert(AuthenticatedPrincipal::ApiKey { key_id });
+            Ok(next.run(request).await)
+        }
         Ok(None) => Err((
             StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::alerts::manager::AlertManager;
-use crate::auth::{AdminLoginRequest, AdminLoginResponse, AuthService, CreateApiKeyRequest};
+use crate::auth::{AdminLoginRequest, AdminLoginResponse, AdminUser, AuthService, CreateApiKeyRequest};
 use crate::db::Database;
 use crate::storage::{Agent, DataPoint, MetricsPayload, StorageStats, TimeSeriesStore};
 use crate::websocket::{WebSocketManager, WsMessage};
@@ -47,6 +47,8 @@ impl AppState {
 #[derive(Debug)]
 pub enum ApiError {
     BadRequest(String),
+    Unauthorized(String),
+    Forbidden(String),
     InternalError(String),
 }
 
@@ -54,6 +56,8 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            ApiError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
             ApiError::InternalError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
@@ -188,8 +192,10 @@ pub struct MetricsResponse {
 /// GET /api/v1/metrics - Query metrics
 pub async fn query_metrics(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<MetricsQuery>,
 ) -> Result<Json<MetricsResponse>, ApiError> {
+    ensure_agent_access(&state, &headers, &params.agent_id).await?;
     info!(
         "Querying metrics for agent '{}', metric '{}'",
         params.agent_id, params.metric
@@ -271,8 +277,10 @@ pub struct LatestMetric {
 /// GET /api/v1/metrics/latest - Get latest values for all metrics of an agent
 pub async fn get_latest_metrics(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<LatestMetricsQuery>,
 ) -> Result<Json<LatestMetricsResponse>, ApiError> {
+    ensure_agent_access(&state, &headers, &params.agent_id).await?;
     info!("Getting latest metrics for agent '{}'", params.agent_id);
 
     let metric_names = state.store.get_agent_metrics(&params.agent_id);
@@ -322,61 +330,36 @@ pub async fn list_agents(
 ) -> Result<Json<Vec<Agent>>, ApiError> {
     info!("Listing registered agents");
 
-    // Extract API key from headers
-    let api_key = headers
-        .get("X-API-Key")
-        .or_else(|| headers.get("Authorization"))
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)));
-
     let all_agents = state.store.get_agents();
 
-    // If no auth service or no API key, return all agents (backward compatibility)
-    let filtered_agents = if let (Some(auth_service), Some(key)) = (&state.auth_service, api_key) {
-        match auth_service.validate_api_key(key).await {
-            Ok(Some(api_key_id)) => {
-                // Filter agents to only those registered with this API key
-                if let Some(db) = &state.database {
-                    match db.get_agents_by_api_key(api_key_id).await {
-                        Ok(agent_ids) => all_agents
-                            .into_iter()
-                            .filter(|agent| agent_ids.contains(&agent.id))
-                            .collect(),
-                        Err(e) => {
-                            error!("Failed to get agents by API key: {}", e);
-                            all_agents
-                        }
-                    }
-                } else {
-                    all_agents
-                }
-            }
-            _ => all_agents, // If validation fails, return all for backward compatibility
+    let filtered_agents = match request_principal(&state, &headers).await? {
+        RequestPrincipal::Admin => all_agents,
+        RequestPrincipal::ApiKey(key_id) => {
+            let allowed = tenant_agent_ids(&state, key_id).await?;
+            all_agents
+                .into_iter()
+                .filter(|agent| allowed.contains(&agent.id))
+                .collect()
         }
-    } else {
-        all_agents
     };
 
     Ok(Json(filtered_agents))
 }
 
 /// GET /api/v1/agents/:agent_id - Get specific agent details
-#[derive(Debug, Deserialize)]
-pub struct AgentQuery {
-    pub agent_id: String,
-}
-
 pub async fn get_agent(
     State(state): State<Arc<AppState>>,
-    Query(params): Query<AgentQuery>,
+    headers: HeaderMap,
+    Path(agent_id): Path<String>,
 ) -> Result<Json<Agent>, ApiError> {
-    info!("Getting agent details for '{}'", params.agent_id);
+    info!("Getting agent details for '{}'", agent_id);
+    ensure_agent_access(&state, &headers, &agent_id).await?;
 
     state
         .store
-        .get_agent(&params.agent_id)
+        .get_agent(&agent_id)
         .map(Json)
-        .ok_or_else(|| ApiError::BadRequest(format!("Agent '{}' not found", params.agent_id)))
+        .ok_or_else(|| ApiError::BadRequest(format!("Agent '{}' not found", agent_id)))
 }
 
 /// GET /api/v1/stats - Get storage statistics (filtered by API key)
@@ -386,31 +369,13 @@ pub async fn get_stats(
 ) -> Result<Json<StorageStats>, ApiError> {
     info!("Getting storage statistics");
 
-    // Extract API key from headers
-    let api_key = headers
-        .get("X-API-Key")
-        .or_else(|| headers.get("Authorization"))
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)));
-
-    let mut stats = state.store.get_stats();
-
-    // Filter agent count if API key is provided
-    if let (Some(auth_service), Some(key)) = (&state.auth_service, api_key) {
-        if let Ok(Some(api_key_id)) = auth_service.validate_api_key(key).await {
-            // Update agent count to only include agents for this API key
-            if let Some(db) = &state.database {
-                if let Ok(agent_ids) = db.get_agents_by_api_key(api_key_id).await {
-                    let all_agents = state.store.get_agents();
-                    let filtered_count = all_agents
-                        .iter()
-                        .filter(|agent| agent_ids.contains(&agent.id))
-                        .count();
-                    stats.total_agents = filtered_count;
-                }
-            }
+    let stats = match request_principal(&state, &headers).await? {
+        RequestPrincipal::Admin => state.store.get_stats(),
+        RequestPrincipal::ApiKey(key_id) => {
+            let allowed = tenant_agent_ids(&state, key_id).await?;
+            state.store.get_stats_for_agents(&allowed)
         }
-    }
+    };
 
     Ok(Json(stats))
 }
@@ -428,6 +393,7 @@ pub async fn health_check() -> impl IntoResponse {
 /// POST /api/v1/logs - Ingest logs from agents
 pub async fn ingest_logs(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<crate::storage::LogsPayload>,
 ) -> Result<impl IntoResponse, ApiError> {
     info!(
@@ -436,11 +402,29 @@ pub async fn ingest_logs(
         payload.agent_id
     );
 
+    let api_key = extract_api_key(&headers)
+        .ok_or_else(|| ApiError::Unauthorized("Missing API key".to_string()))?;
+    let auth_service = state
+        .auth_service
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Authentication is not available".to_string()))?;
+    let api_key_id = auth_service
+        .validate_api_key_with_agent(api_key, Some(&payload.agent_id))
+        .await
+        .map_err(|_| ApiError::InternalError("Authentication service error".to_string()))?
+        .ok_or_else(|| ApiError::Forbidden("Agent ID is unavailable to this API key".to_string()))?;
+
     // Store logs in-memory for fast queries
     state.store.insert_logs(payload.clone());
 
     // Persist to database if available
     if let Some(db) = &state.database {
+        db.register_agent(&payload.agent_id, Some(api_key_id), None, None, None)
+            .await
+            .map_err(|e| {
+                error!("Failed to register log agent: {}", e);
+                ApiError::InternalError("Failed to register agent".to_string())
+            })?;
         for log in &payload.logs {
             if let Err(e) = db
                 .insert_log(
@@ -456,6 +440,16 @@ pub async fn ingest_logs(
                 // Continue anyway - logs are still in memory
             }
         }
+    }
+
+    for log in &payload.logs {
+        state.ws_manager.broadcast_log(WsMessage::Log {
+            agent_id: payload.agent_id.clone(),
+            level: log.level.to_string(),
+            message: log.message.clone(),
+            source: log.source.clone(),
+            timestamp: log.timestamp,
+        });
     }
 
     Ok((
@@ -494,6 +488,7 @@ pub struct LogsResponse {
 /// GET /api/v1/logs - Query logs
 pub async fn query_logs(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<LogsQuery>,
 ) -> Result<Json<LogsResponse>, ApiError> {
     info!(
@@ -514,7 +509,21 @@ pub async fn query_logs(
             _ => None,
         });
 
+    let allowed_agent_ids = match request_principal(&state, &headers).await? {
+        RequestPrincipal::Admin => None,
+        RequestPrincipal::ApiKey(key_id) => Some(tenant_agent_ids(&state, key_id).await?),
+    };
+    if let Some(agent_id) = params.agent_id.as_deref() {
+        if allowed_agent_ids
+            .as_ref()
+            .is_some_and(|allowed| !allowed.iter().any(|id| id == agent_id))
+        {
+            return Err(ApiError::Forbidden("Agent is not owned by this tenant".to_string()));
+        }
+    }
+
     let logs = state.store.query_logs(
+        allowed_agent_ids.as_deref(),
         params.agent_id.as_deref(),
         level,
         params.from,
@@ -524,7 +533,10 @@ pub async fn query_logs(
     );
 
     let count = logs.len();
-    let total_count = state.store.get_log_count();
+    let total_count = allowed_agent_ids.as_ref().map_or_else(
+        || state.store.get_log_count(),
+        |allowed| state.store.get_log_count_for_agents(allowed),
+    );
 
     Ok(Json(LogsResponse {
         logs,
@@ -538,8 +550,10 @@ pub async fn query_logs(
 /// POST /api/v1/alert-rules - Create a new alert rule
 pub async fn create_alert_rule(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<crate::alerts::CreateAlertRuleRequest>,
 ) -> Result<Json<crate::alerts::AlertRule>, ApiError> {
+    require_admin(&state, &headers).await?;
     info!("Creating new alert rule: {}", payload.name);
     let rule = state.alert_manager.create_rule(payload).await;
     Ok(Json(rule))
@@ -548,17 +562,21 @@ pub async fn create_alert_rule(
 /// GET /api/v1/alert-rules - List all alert rules
 pub async fn list_alert_rules(
     State(state): State<Arc<AppState>>,
-) -> Json<crate::alerts::AlertRulesResponse> {
+    headers: HeaderMap,
+) -> Result<Json<crate::alerts::AlertRulesResponse>, ApiError> {
+    require_admin(&state, &headers).await?;
     let rules = state.alert_manager.list_rules().await;
     let total = rules.len();
-    Json(crate::alerts::AlertRulesResponse { rules, total })
+    Ok(Json(crate::alerts::AlertRulesResponse { rules, total }))
 }
 
 /// GET /api/v1/alert-rules/:id - Get specific alert rule
 pub async fn get_alert_rule(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(rule_id): Path<String>,
 ) -> Result<Json<crate::alerts::AlertRule>, ApiError> {
+    require_admin(&state, &headers).await?;
     state
         .alert_manager
         .get_rule(&rule_id)
@@ -570,9 +588,11 @@ pub async fn get_alert_rule(
 /// PUT /api/v1/alert-rules/:id - Update alert rule
 pub async fn update_alert_rule(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(rule_id): Path<String>,
     Json(payload): Json<crate::alerts::UpdateAlertRuleRequest>,
 ) -> Result<Json<crate::alerts::AlertRule>, ApiError> {
+    require_admin(&state, &headers).await?;
     info!("Updating alert rule: {}", rule_id);
     state
         .alert_manager
@@ -585,8 +605,10 @@ pub async fn update_alert_rule(
 /// DELETE /api/v1/alert-rules/:id - Delete alert rule
 pub async fn delete_alert_rule(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(rule_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    require_admin(&state, &headers).await?;
     info!("Deleting alert rule: {}", rule_id);
     if state.alert_manager.delete_rule(&rule_id).await {
         Ok(StatusCode::NO_CONTENT)
@@ -601,8 +623,10 @@ pub async fn delete_alert_rule(
 /// POST /api/v1/alert-rules/:id/toggle - Toggle alert rule enabled/disabled
 pub async fn toggle_alert_rule(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(rule_id): Path<String>,
 ) -> Result<Json<crate::alerts::AlertRule>, ApiError> {
+    require_admin(&state, &headers).await?;
     info!("Toggling alert rule: {}", rule_id);
     state
         .alert_manager
@@ -617,36 +641,16 @@ pub async fn list_alerts(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<crate::alerts::AlertsResponse>, ApiError> {
-    // Extract API key from headers
-    let api_key = headers
-        .get("X-API-Key")
-        .or_else(|| headers.get("Authorization"))
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)));
-
     let all_alerts = state.alert_manager.get_all_alerts().await;
-
-    // Filter alerts by API key if provided
-    let filtered_alerts = if let (Some(auth_service), Some(key)) = (&state.auth_service, api_key) {
-        if let Ok(Some(api_key_id)) = auth_service.validate_api_key(key).await {
-            // Only include alerts for agents associated with this API key
-            if let Some(db) = &state.database {
-                if let Ok(agent_ids) = db.get_agents_by_api_key(api_key_id).await {
-                    all_alerts
-                        .into_iter()
-                        .filter(|alert| agent_ids.contains(&alert.agent_id))
-                        .collect()
-                } else {
-                    all_alerts
-                }
-            } else {
-                all_alerts
-            }
-        } else {
+    let filtered_alerts = match request_principal(&state, &headers).await? {
+        RequestPrincipal::Admin => all_alerts,
+        RequestPrincipal::ApiKey(key_id) => {
+            let allowed = tenant_agent_ids(&state, key_id).await?;
             all_alerts
+                .into_iter()
+                .filter(|alert| allowed.contains(&alert.agent_id))
+                .collect()
         }
-    } else {
-        all_alerts
     };
 
     let active_alerts: Vec<_> = filtered_alerts
@@ -685,9 +689,16 @@ pub async fn get_alert(
 /// POST /api/v1/alerts/:id/acknowledge - Acknowledge an alert
 pub async fn acknowledge_alert(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(alert_id): Path<String>,
     Json(payload): Json<crate::alerts::AcknowledgeAlertRequest>,
 ) -> Result<Json<crate::alerts::Alert>, ApiError> {
+    let alert = state
+        .alert_manager
+        .get_alert(&alert_id)
+        .await
+        .ok_or_else(|| ApiError::BadRequest(format!("Alert {} not found", alert_id)))?;
+    ensure_agent_access(&state, &headers, &alert.agent_id).await?;
     info!(
         "Acknowledging alert: {} by {}",
         alert_id, payload.acknowledged_by
@@ -758,15 +769,14 @@ pub async fn create_api_key(
     Json(request): Json<CreateApiKeyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate admin token
-    let _token = extract_admin_token(&headers)
-        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+    let admin = require_admin(&state, &headers).await?;
 
     let auth_service = state
         .auth_service
         .as_ref()
         .ok_or_else(|| ApiError::BadRequest("Authentication is not enabled".to_string()))?;
 
-    match auth_service.create_api_key(request).await {
+    match auth_service.create_api_key(request, &admin.username).await {
         Ok(response) => {
             info!("Created new API key: {}", response.name);
             Ok(Json(response))
@@ -825,8 +835,7 @@ pub async fn list_api_keys(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate admin token
-    let _token = extract_admin_token(&headers)
-        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+    require_admin(&state, &headers).await?;
 
     let auth_service = state
         .auth_service
@@ -862,8 +871,7 @@ pub async fn revoke_api_key(
     Path(key_id): Path<i64>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate admin token
-    let _token = extract_admin_token(&headers)
-        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+    require_admin(&state, &headers).await?;
 
     let auth_service = state
         .auth_service
@@ -911,7 +919,10 @@ pub async fn admin_login(
         .await
     {
         Ok(Some(admin)) => {
-            let token = AuthService::generate_admin_token();
+            let token = AuthService::generate_admin_token(&admin).map_err(|e| {
+                error!("Failed to issue admin token: {}", e);
+                ApiError::InternalError("Admin token configuration is invalid".to_string())
+            })?;
             info!("Admin user '{}' logged in successfully", admin.username);
             Ok(Json(AdminLoginResponse {
                 username: admin.username,
@@ -931,28 +942,14 @@ pub async fn admin_login(
 
 /// GET /api/v1/admin/validate - Validate admin session
 pub async fn admin_validate(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Extract admin token from headers
-    let token = headers
-        .get("X-Admin-Token")
-        .or_else(|| headers.get("Authorization"))
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)));
-
-    if let Some(token) = token {
-        // Validate token format (simple check - in production use JWT or session store)
-        if token.starts_with("admin_") && token.len() > 10 {
-            return Ok(Json(serde_json::json!({
-                "valid": true
-            })));
-        }
-    }
-
-    Err(ApiError::BadRequest(
-        "Invalid or missing admin token".to_string(),
-    ))
+    let admin = require_admin(&state, &headers).await?;
+    Ok(Json(serde_json::json!({
+        "valid": true,
+        "username": admin.username
+    })))
 }
 
 /// POST /api/v1/admin/change-password - Change admin password
@@ -962,8 +959,13 @@ pub async fn admin_change_password(
     Json(request): Json<ChangePasswordRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate admin token
-    let _token = extract_admin_token(&headers)
-        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+    let admin = require_admin(&state, &headers).await?;
+
+    if admin.username != request.username {
+        return Err(ApiError::Forbidden(
+            "Admins may only change their own password".to_string(),
+        ));
+    }
 
     let auth_service = state
         .auth_service
@@ -1001,8 +1003,7 @@ pub async fn admin_create_user(
     Json(request): Json<CreateAdminRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate admin token
-    let _token = extract_admin_token(&headers)
-        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+    require_admin(&state, &headers).await?;
 
     let auth_service = state
         .auth_service
@@ -1042,8 +1043,7 @@ pub async fn admin_list_users(
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate admin token
-    let _token = extract_admin_token(&headers)
-        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+    require_admin(&state, &headers).await?;
 
     let auth_service = state
         .auth_service
@@ -1066,8 +1066,7 @@ pub async fn admin_deactivate_user(
     Path(username): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate admin token
-    let _token = extract_admin_token(&headers)
-        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+    require_admin(&state, &headers).await?;
 
     let auth_service = state
         .auth_service
@@ -1098,8 +1097,7 @@ pub async fn admin_activate_user(
     Path(username): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Validate admin token
-    let _token = extract_admin_token(&headers)
-        .ok_or_else(|| ApiError::BadRequest("Invalid or missing admin token".to_string()))?;
+    require_admin(&state, &headers).await?;
 
     let auth_service = state
         .auth_service
@@ -1123,15 +1121,118 @@ pub async fn admin_activate_user(
     }
 }
 
-// Helper function to extract admin token
-fn extract_admin_token(headers: &HeaderMap) -> Option<String> {
+fn extract_admin_token(headers: &HeaderMap) -> Option<&str> {
     headers
         .get("X-Admin-Token")
         .or_else(|| headers.get("Authorization"))
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer ").or(Some(s)))
-        .filter(|token| token.starts_with("admin_"))
-        .map(|s| s.to_string())
+}
+
+enum RequestPrincipal {
+    Admin,
+    ApiKey(i64),
+}
+
+fn extract_api_key(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("X-API-Key")
+        .and_then(|h| h.to_str().ok())
+        .or_else(|| {
+            headers
+                .get("Authorization")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+        })
+}
+
+async fn request_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<RequestPrincipal, ApiError> {
+    let auth_service = state
+        .auth_service
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Authentication is not available".to_string()))?;
+
+    if let Some(token) = extract_admin_token(headers) {
+        if auth_service
+            .validate_admin_token(token)
+            .await
+            .map_err(|_| ApiError::InternalError("Authentication service error".to_string()))?
+            .is_some()
+        {
+            return Ok(RequestPrincipal::Admin);
+        }
+    }
+
+    let key = extract_api_key(headers)
+        .ok_or_else(|| ApiError::Unauthorized("Missing API key".to_string()))?;
+    let key_id = auth_service
+        .validate_api_key(key)
+        .await
+        .map_err(|_| ApiError::InternalError("Authentication service error".to_string()))?
+        .ok_or_else(|| ApiError::Unauthorized("Invalid or expired API key".to_string()))?;
+    Ok(RequestPrincipal::ApiKey(key_id))
+}
+
+async fn tenant_agent_ids(state: &AppState, key_id: i64) -> Result<Vec<String>, ApiError> {
+    state
+        .database
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Database is not available".to_string()))?
+        .get_agents_by_api_key(key_id)
+        .await
+        .map_err(|e| {
+            error!("Failed to resolve tenant agents: {}", e);
+            ApiError::InternalError("Failed to resolve tenant ownership".to_string())
+        })
+}
+
+async fn ensure_agent_access(
+    state: &AppState,
+    headers: &HeaderMap,
+    agent_id: &str,
+) -> Result<(), ApiError> {
+    match request_principal(state, headers).await? {
+        RequestPrincipal::Admin => Ok(()),
+        RequestPrincipal::ApiKey(key_id) => {
+            let database = state
+                .database
+                .as_ref()
+                .ok_or_else(|| ApiError::InternalError("Database is not available".to_string()))?;
+            if database
+                .agent_belongs_to_api_key(agent_id, key_id)
+                .await
+                .map_err(|_| ApiError::InternalError("Failed to verify agent ownership".to_string()))?
+            {
+                Ok(())
+            } else {
+                Err(ApiError::Forbidden("Agent is not owned by this tenant".to_string()))
+            }
+        }
+    }
+}
+
+async fn require_admin(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<AdminUser, ApiError> {
+    let token = extract_admin_token(headers)
+        .ok_or_else(|| ApiError::Unauthorized("Missing admin token".to_string()))?;
+    let auth_service = state
+        .auth_service
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Authentication is not enabled".to_string()))?;
+
+    auth_service
+        .validate_admin_token(token)
+        .await
+        .map_err(|e| {
+            error!("Admin token validation failed: {}", e);
+            ApiError::InternalError("Authentication service error".to_string())
+        })?
+        .ok_or_else(|| ApiError::Unauthorized("Invalid or expired admin token".to_string()))
 }
 
 /// Request to change admin password
@@ -1214,9 +1315,7 @@ pub async fn list_agent_requests(
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Verify admin token
-    if extract_admin_token(&headers).is_none() {
-        return Err(ApiError::BadRequest("Admin access required".to_string()));
-    }
+    let _admin = require_admin(&state, &headers).await?;
 
     let database = state
         .database
@@ -1247,9 +1346,7 @@ pub async fn update_agent_request_status(
     Json(payload): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Verify admin token
-    if extract_admin_token(&headers).is_none() {
-        return Err(ApiError::BadRequest("Admin access required".to_string()));
-    }
+    let admin = require_admin(&state, &headers).await?;
 
     let database = state
         .database
@@ -1262,7 +1359,7 @@ pub async fn update_agent_request_status(
         .ok_or_else(|| ApiError::BadRequest("Status is required".to_string()))?;
 
     let notes = payload.get("notes").and_then(|n| n.as_str());
-    let reviewed_by = payload.get("reviewed_by").and_then(|r| r.as_str());
+    let reviewed_by = Some(admin.username.as_str());
 
     match database
         .update_agent_request_status(request_id, status, notes, reviewed_by)

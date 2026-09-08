@@ -10,6 +10,7 @@ mod websocket;
 
 use anyhow::Result;
 use axum::{
+    http::{header, HeaderName, HeaderValue, Method},
     routing::{get, post},
     Router,
 };
@@ -88,6 +89,10 @@ async fn main() -> Result<()> {
         config.server.port = port;
     }
 
+    if config.auth.enabled {
+        auth::admin::validate_configuration()?;
+    }
+
     // Initialize database if enabled
     let database = if config.database.enabled {
         info!("Initializing database at: {}", config.database.url);
@@ -144,9 +149,9 @@ async fn main() -> Result<()> {
                     ws_manager_clone.broadcast_alert(websocket::WsMessage::Alert {
                         alert_id: alert.id.to_string(),
                         agent_id: alert.agent_id.clone(),
-                        severity: format!("{:?}", alert.severity),
+                        severity: format!("{:?}", alert.severity).to_lowercase(),
                         message: alert.message.clone(),
-                        state: format!("{:?}", alert.state),
+                        state: format!("{:?}", alert.state).to_lowercase(),
                     });
                 }
             }
@@ -183,6 +188,9 @@ async fn main() -> Result<()> {
     // Initialize authentication service if database is enabled
     let auth_service = if let Some(db) = &database {
         let service = auth::AuthService::new(db.pool().clone());
+        if config.auth.enabled {
+            service.ensure_bootstrap_admin().await?;
+        }
         info!("Initialized authentication service");
         Some(Arc::new(service))
     } else {
@@ -294,6 +302,19 @@ async fn main() -> Result<()> {
             axum::routing::put(api::update_agent_request_status),
         );
 
+    let allowed_origin = std::env::var("CORS_ALLOWED_ORIGIN")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string())
+        .parse::<HeaderValue>()?;
+    let cors = CorsLayer::new()
+        .allow_origin(allowed_origin)
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("x-admin-token"),
+        ]);
+
     let app = Router::new()
         .merge(protected_routes)
         .merge(public_routes)
@@ -304,7 +325,7 @@ async fn main() -> Result<()> {
         // Shared state
         .with_state(state)
         // Middleware
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .layer(TraceLayer::new_for_http());
 
     let bind_addr = config.bind_address();

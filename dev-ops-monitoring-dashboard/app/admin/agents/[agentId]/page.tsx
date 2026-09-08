@@ -11,9 +11,9 @@ import { extractMetric, formatBytes } from '@/lib/metrics-utils'
 
 interface Agent {
   id: string
-  agent_id: string
+  agent_id?: string
   name: string
-  agent_type: string
+  agent_type?: string
   status: string
   last_seen: string
   api_key_id?: number
@@ -42,7 +42,7 @@ export default function AdminAgentDetailPage() {
         listApiKeys()
       ])
       
-      const foundAgent = agentsData.find((a: Agent) => a.id === agentId)
+      const foundAgent = agentsData.find(a => a.id === agentId)
       if (!foundAgent) {
         setError('Agent not found')
         return

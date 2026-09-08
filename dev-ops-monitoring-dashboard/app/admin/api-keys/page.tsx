@@ -282,7 +282,7 @@ function CreateKeyModal({
           <div className="mb-6 p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
             <p className="text-yellow-500 font-semibold mb-2">⚠️ Important: Save this key now!</p>
             <p className="text-sm text-muted-foreground">
-              This is the only time you'll be able to see the full key. Make sure to copy it and store it securely.
+              This is the only time you&apos;ll be able to see the full key. Make sure to copy it and store it securely.
             </p>
           </div>
           <div className="mb-6">

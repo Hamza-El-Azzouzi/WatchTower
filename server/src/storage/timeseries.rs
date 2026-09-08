@@ -288,6 +288,32 @@ impl TimeSeriesStore {
         }
     }
 
+    pub fn get_stats_for_agents(&self, allowed_agent_ids: &[String]) -> StorageStats {
+        let data = self.data.read().expect("metrics data lock poisoned");
+        let agents = self.agents.read().expect("agents lock poisoned");
+        let allowed: std::collections::HashSet<&str> =
+            allowed_agent_ids.iter().map(String::as_str).collect();
+        let mut total_metrics = 0;
+        let mut total_data_points = 0;
+
+        for (agent_id, agent_data) in data.iter() {
+            if !allowed.contains(agent_id.as_str()) {
+                continue;
+            }
+            total_metrics += agent_data.len();
+            total_data_points += agent_data.values().map(Vec::len).sum::<usize>();
+        }
+
+        StorageStats {
+            total_agents: agents
+                .keys()
+                .filter(|agent_id| allowed.contains(agent_id.as_str()))
+                .count(),
+            total_metrics,
+            total_data_points,
+        }
+    }
+
     /// Insert logs from agents
     pub fn insert_logs(&self, payload: LogsPayload) {
         // Register or update agent
@@ -324,6 +350,7 @@ impl TimeSeriesStore {
     /// Query logs with filters
     pub fn query_logs(
         &self,
+        allowed_agent_ids: Option<&[String]>,
         agent_id: Option<&str>,
         level: Option<LogLevel>,
         from: Option<DateTime<Utc>>,
@@ -336,6 +363,12 @@ impl TimeSeriesStore {
         let filtered: Vec<LogEntry> = logs
             .iter()
             .filter(|log| {
+                if let Some(allowed) = allowed_agent_ids {
+                    if !allowed.iter().any(|id| id == &log.agent_id) {
+                        return false;
+                    }
+                }
+
                 // Filter by agent_id
                 if let Some(agent) = agent_id {
                     if log.agent_id != agent {
@@ -387,6 +420,13 @@ impl TimeSeriesStore {
     pub fn get_log_count(&self) -> usize {
         let logs = self.logs.read().expect("logs lock poisoned");
         logs.len()
+    }
+
+    pub fn get_log_count_for_agents(&self, allowed_agent_ids: &[String]) -> usize {
+        let logs = self.logs.read().expect("logs data lock poisoned");
+        logs.iter()
+            .filter(|log| allowed_agent_ids.iter().any(|id| id == &log.agent_id))
+            .count()
     }
 
     /// Clean up old logs (older than specified duration in seconds)

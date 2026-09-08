@@ -5,6 +5,7 @@ use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{DateTime, Duration, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 
 /// API key for authentication
@@ -83,6 +84,11 @@ impl ApiKey {
         )
     }
 
+    fn hash(raw_key: &str) -> String {
+        use base64::{engine::general_purpose, Engine as _};
+        general_purpose::STANDARD_NO_PAD.encode(Sha256::digest(raw_key.as_bytes()))
+    }
+
     /// Check if the API key is valid (not expired and not revoked)
     pub fn is_valid(&self) -> bool {
         if self.revoked {
@@ -109,16 +115,47 @@ impl AuthService {
         Self { pool }
     }
 
+    /// Ensure a new installation has an administrator without shipping default credentials.
+    pub async fn ensure_bootstrap_admin(&self) -> Result<()> {
+        let active_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM admin_users WHERE is_active = true")
+                .fetch_one(&self.pool)
+                .await?;
+        if active_count > 0 {
+            return Ok(());
+        }
+
+        let username = std::env::var("BOOTSTRAP_ADMIN_USERNAME")
+            .unwrap_or_else(|_| "admin".to_string());
+        let password = std::env::var("BOOTSTRAP_ADMIN_PASSWORD").map_err(|_| {
+            anyhow::anyhow!(
+                "No active administrator exists; set BOOTSTRAP_ADMIN_PASSWORD for first startup"
+            )
+        })?;
+        if password.chars().count() < 12 {
+            anyhow::bail!("BOOTSTRAP_ADMIN_PASSWORD must contain at least 12 characters");
+        }
+
+        self.create_admin(
+            &username,
+            &password,
+            None,
+            Some("Bootstrap Administrator".into()),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Validate an API key and return the key ID if valid
     pub async fn validate_api_key(&self, key: &str) -> Result<Option<i64>> {
         let result = sqlx::query(
             r#"
             SELECT id, revoked, expires_at
             FROM api_keys
-            WHERE key = $1
+            WHERE key_hash = $1
             "#,
         )
-        .bind(key)
+        .bind(ApiKey::hash(key))
         .fetch_optional(&self.pool)
         .await?;
 
@@ -153,22 +190,28 @@ impl AuthService {
     pub async fn create_api_key(
         &self,
         request: CreateApiKeyRequest,
+        created_by: &str,
     ) -> Result<CreateApiKeyResponse> {
         let key = ApiKey::generate();
+        let key_hash = ApiKey::hash(&key);
+        let key_prefix: String = key.chars().take(12).collect();
         let expires_at = request
             .expires_in_days
             .map(|days| Utc::now() + Duration::days(days));
 
         sqlx::query(
             r#"
-            INSERT INTO api_keys (key, name, description, expires_at, created_by, max_agents, created_at)
-            VALUES ($1, $2, $3, $4, 'admin', $5, $6)
+            INSERT INTO api_keys
+                (key_hash, key_prefix, name, description, expires_at, created_by, max_agents, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             "#,
         )
-        .bind(&key)
+        .bind(key_hash)
+        .bind(key_prefix)
         .bind(&request.name)
         .bind(&request.description)
         .bind(expires_at)
+        .bind(created_by)
         .bind(request.max_agents)
         .bind(Utc::now())
         .execute(&self.pool)
@@ -187,8 +230,8 @@ impl AuthService {
         let rows = sqlx::query(
             r#"
             SELECT
-                id, key, name, description, created_at, expires_at,
-                last_used_at, revoked, revoked_at, 'admin' as created_by, max_agents
+                id, COALESCE(key_prefix, LEFT(key, 12)) AS key, name, description, created_at, expires_at,
+                last_used_at, revoked, revoked_at, created_by, max_agents
             FROM api_keys
             ORDER BY created_at DESC
             "#,
@@ -255,6 +298,19 @@ impl AuthService {
             Some(key_id) => {
                 // If we have an agent_id, check limits
                 if let Some(aid) = agent_id {
+                    // Agent IDs are tenant-owned. A valid key must not be able to
+                    // overwrite data for an ID already registered by another key.
+                    let existing_owner = sqlx::query("SELECT api_key_id FROM agents WHERE id = $1")
+                        .bind(aid)
+                        .fetch_optional(&self.pool)
+                        .await?;
+                    if let Some(row) = existing_owner {
+                        let owner: Option<i64> = row.get("api_key_id");
+                        if owner.is_some_and(|owner_id| owner_id != key_id) {
+                            return Ok(None);
+                        }
+                    }
+
                     // Get max_agents for this key
                     let max_result = sqlx::query("SELECT max_agents FROM api_keys WHERE id = $1")
                         .bind(key_id)
@@ -333,10 +389,41 @@ impl AuthService {
         Ok(None)
     }
 
-    /// Generate admin JWT token
-    pub fn generate_admin_token() -> String {
-        use crate::auth::admin::generate_jwt_token;
-        generate_jwt_token("admin", "admin")
+    /// Generate an expiring, signed token for an authenticated admin.
+    pub fn generate_admin_token(admin: &AdminUser) -> Result<String> {
+        crate::auth::admin::generate_jwt_token(admin.id, &admin.username)
+    }
+
+    /// Validate an admin token and ensure its user is still active.
+    pub async fn validate_admin_token(&self, token: &str) -> Result<Option<AdminUser>> {
+        let (user_id, username) = match crate::auth::admin::validate_jwt_token(token) {
+            Ok(identity) => identity,
+            Err(_) => return Ok(None),
+        };
+
+        let row = sqlx::query(
+            r#"
+            SELECT id, username, password_hash, email, full_name, created_at,
+                   last_login_at, is_active
+            FROM admin_users
+            WHERE id = $1 AND username = $2 AND is_active = true
+            "#,
+        )
+        .bind(user_id)
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|row| AdminUser {
+            id: row.get("id"),
+            username: row.get("username"),
+            password_hash: row.get("password_hash"),
+            email: row.get("email"),
+            full_name: row.get("full_name"),
+            created_at: row.get("created_at"),
+            last_login_at: row.get("last_login_at"),
+            is_active: row.get("is_active"),
+        }))
     }
 
     /// Change admin password
