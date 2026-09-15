@@ -3,18 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
-
-interface AlertRule {
-  id: string
-  name: string
-  description: string
-  metric: string
-  condition: string
-  threshold: number
-  duration_seconds: number
-  severity: string
-  cooldown_seconds: number
-}
+import { getAlertRule, getNotificationChannels, updateAlertRule, type NotificationChannel } from '@/lib/alerts-api'
 
 export default function EditAlertRulePage() {
   const router = useRouter()
@@ -23,36 +12,34 @@ export default function EditAlertRulePage() {
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [notificationChannels, setNotificationChannels] = useState<NotificationChannel[]>([])
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     metric: 'cpu_usage',
-    condition: 'GreaterThan',
+    condition: 'greater_than' as 'greater_than' | 'less_than' | 'equals' | 'not_equals',
     threshold: 80,
     duration: 30,
-    severity: 'Warning',
+    severity: 'warning' as 'info' | 'warning' | 'critical',
     cooldown: 300,
+    channels: [] as string[],
   })
 
   useEffect(() => {
     const fetchRule = async () => {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-        const response = await fetch(`${apiUrl}/api/v1/alert-rules/${ruleId}`)
-        if (!response.ok) throw new Error('Failed to fetch rule')
-        
-        const data = await response.json()
+        const [data, channels] = await Promise.all([getAlertRule(ruleId), getNotificationChannels()])
+        setNotificationChannels(channels)
         setFormData({
           name: data.name,
           description: data.description || '',
           metric: data.metric,
-          condition: data.condition === 'greaterthan' ? 'GreaterThan' 
-                    : data.condition === 'lessthan' ? 'LessThan'
-                    : data.condition === 'equals' ? 'Equals' : 'NotEquals',
+          condition: data.condition,
           threshold: data.threshold,
           duration: data.duration_seconds,
-          severity: data.severity.charAt(0).toUpperCase() + data.severity.slice(1),
+          severity: data.severity,
           cooldown: data.cooldown_seconds || 300,
+          channels: data.channels,
         })
         setLoading(false)
       } catch (err) {
@@ -71,30 +58,21 @@ export default function EditAlertRulePage() {
     setError('')
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
-      const response = await fetch(`${apiUrl}/api/v1/alert-rules/${ruleId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await updateAlertRule(ruleId, {
           name: formData.name,
           description: formData.description,
           metric: formData.metric,
-          condition: formData.condition.toLowerCase(),
+          condition: formData.condition,
           threshold: Number(formData.threshold),
           duration_seconds: Number(formData.duration),
-          severity: formData.severity.toLowerCase(),
+          severity: formData.severity,
           cooldown_seconds: Number(formData.cooldown),
-        }),
+          channels: formData.channels,
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || 'Failed to update alert rule')
-      }
-
       router.push('/alerts')
-    } catch (err: any) {
-      setError(err.message || 'Failed to update alert rule')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to update alert rule')
     }
   }
 
@@ -111,10 +89,10 @@ export default function EditAlertRulePage() {
   ]
 
   const conditions = [
-    { value: 'GreaterThan', label: 'Greater Than (>)' },
-    { value: 'LessThan', label: 'Less Than (<)' },
-    { value: 'Equals', label: 'Equals (=)' },
-    { value: 'NotEquals', label: 'Not Equals (≠)' },
+    { value: 'greater_than', label: 'Greater Than (>)' },
+    { value: 'less_than', label: 'Less Than (<)' },
+    { value: 'equals', label: 'Equals (=)' },
+    { value: 'not_equals', label: 'Not Equals (≠)' },
   ]
 
   if (loading) {
@@ -217,7 +195,7 @@ export default function EditAlertRulePage() {
                 </label>
                 <select
                   value={formData.condition}
-                  onChange={(e) => setFormData({ ...formData, condition: e.target.value })}
+                  onChange={(e) => setFormData({ ...formData, condition: e.target.value as typeof formData.condition })}
                   className="w-full px-4 py-2 bg-background border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                   required
                 >
@@ -267,26 +245,26 @@ export default function EditAlertRulePage() {
             <h2 className="text-lg font-semibold text-foreground">Severity</h2>
             
             <div className="flex gap-3">
-              {['Info', 'Warning', 'Critical'].map((severity) => (
+              {(['info', 'warning', 'critical'] as const).map((severity) => (
                 <button
                   key={severity}
                   type="button"
                   onClick={() => setFormData({ ...formData, severity })}
                   className={`flex-1 py-3 px-4 rounded-lg font-medium transition-smooth ${
                     formData.severity === severity
-                      ? severity === 'Info'
+                      ? severity === 'info'
                         ? 'bg-blue-500 text-white'
-                        : severity === 'Warning'
+                        : severity === 'warning'
                         ? 'bg-yellow-500 text-white'
                         : 'bg-red-500 text-white'
                       : 'bg-background border border-border text-foreground hover:border-primary'
                   }`}
                 >
-                  {severity === 'Info' && 'ℹ️'}
-                  {severity === 'Warning' && '⚠️'}
-                  {severity === 'Critical' && '🔴'}
+                  {severity === 'info' && 'ℹ️'}
+                  {severity === 'warning' && '⚠️'}
+                  {severity === 'critical' && '🔴'}
                   {' '}
-                  {severity}
+                  {severity.charAt(0).toUpperCase() + severity.slice(1)}
                 </button>
               ))}
             </div>
@@ -295,6 +273,13 @@ export default function EditAlertRulePage() {
           {/* Advanced */}
           <div className="bg-card rounded-lg p-6 border border-border space-y-4">
             <h2 className="text-lg font-semibold text-foreground">Advanced Settings</h2>
+
+            <div>
+              <label className="block text-sm font-medium text-foreground mb-2">Notification destinations</label>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {notificationChannels.map(channel => <label key={channel.id} className="flex items-center gap-3 rounded-lg border border-border p-3"><input type="checkbox" checked={formData.channels.includes(channel.id)} onChange={event => setFormData(previous => ({ ...previous, channels: event.target.checked ? [...previous.channels, channel.id] : previous.channels.filter(id => id !== channel.id) }))} /><span className="text-sm">{channel.name}</span></label>)}
+              </div>
+            </div>
             
             <div>
               <label className="block text-sm font-medium text-foreground mb-2">

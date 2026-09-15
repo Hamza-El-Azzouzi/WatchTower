@@ -57,7 +57,7 @@ export default function LogsPage() {
       agent_id: message.agent_id,
       timestamp: message.timestamp,
       level: message.level.toUpperCase() as LogLevel,
-      source: 'websocket',
+      source: message.source,
       message: message.message
     };
     

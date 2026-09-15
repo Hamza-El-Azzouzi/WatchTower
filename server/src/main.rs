@@ -22,6 +22,7 @@ use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 
+use alerts::notifications::NotificationDispatcher;
 use api::AppState;
 use config::Config;
 use storage::TimeSeriesStore;
@@ -133,20 +134,41 @@ async fn main() -> Result<()> {
     let ws_manager = Arc::new(websocket::WebSocketManager::new());
     info!("Initialized WebSocket manager");
 
+    let notification_dispatcher =
+        NotificationDispatcher::new(database.as_ref().expect("database checked above").clone())?;
+    tokio::spawn(notification_dispatcher.clone().run());
+    info!("Started persistent notification delivery worker");
+
     // Start alert evaluation loop
     let alert_manager_clone = alert_manager.clone();
     let alert_check_interval = config.alerts.check_interval_seconds;
+    let offline_after_seconds = config.alerts.offline_after_seconds;
     let ws_manager_clone = ws_manager.clone();
+    let notification_dispatcher_clone = notification_dispatcher.clone();
     tokio::spawn(async move {
         let mut interval =
             tokio::time::interval(tokio::time::Duration::from_secs(alert_check_interval));
         loop {
             interval.tick().await;
-            let triggered = alert_manager_clone.evaluate_alerts().await;
-            if !triggered.is_empty() {
-                info!("Evaluated alerts: {} triggered", triggered.len());
-                // Broadcast alerts via WebSocket
-                for alert in &triggered {
+            let transitions = alert_manager_clone
+                .evaluate_alerts(offline_after_seconds)
+                .await;
+            if !transitions.is_empty() {
+                info!("Evaluated alerts: {} transitions", transitions.len());
+                for transition in &transitions {
+                    let alert = &transition.alert;
+                    match notification_dispatcher_clone
+                        .enqueue_transition(transition)
+                        .await
+                    {
+                        Ok(_) if transition.event_type == alerts::AlertEventType::Firing => {
+                            alert_manager_clone.mark_notified(&alert.id).await;
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            error!(alert_id = %alert.id, %error, "Failed to queue alert notifications")
+                        }
+                    }
                     ws_manager_clone.broadcast_alert(websocket::WsMessage::Alert {
                         alert_id: alert.id.to_string(),
                         agent_id: alert.agent_id.clone(),
@@ -227,12 +249,20 @@ async fn main() -> Result<()> {
         // Alert endpoints (require API key)
         .route("/api/v1/alerts", get(api::list_alerts))
         .route(
+            "/api/v1/incidents/timeline",
+            get(api::list_incident_timeline),
+        )
+        .route(
             "/api/v1/alerts/:alert_id/acknowledge",
             post(api::acknowledge_alert),
         )
         // Alert Rule endpoints (require API key)
         .route("/api/v1/alert-rules", post(api::create_alert_rule))
         .route("/api/v1/alert-rules", get(api::list_alert_rules))
+        .route(
+            "/api/v1/alert-rules/effective",
+            get(api::list_effective_alert_rules),
+        )
         .route("/api/v1/alert-rules/:rule_id", get(api::get_alert_rule))
         .route(
             "/api/v1/alert-rules/:rule_id",
@@ -245,6 +275,31 @@ async fn main() -> Result<()> {
         .route(
             "/api/v1/alert-rules/:rule_id/toggle",
             post(api::toggle_alert_rule),
+        )
+        .route(
+            "/api/v1/notification-channels",
+            get(api::list_notification_channels).post(api::create_notification_channel),
+        )
+        .route(
+            "/api/v1/notification-channels/:id",
+            axum::routing::put(api::set_notification_channel_enabled)
+                .delete(api::delete_notification_channel),
+        )
+        .route(
+            "/api/v1/notification-channels/:id/test",
+            post(api::test_notification_channel),
+        )
+        .route(
+            "/api/v1/notification-deliveries",
+            get(api::list_notification_deliveries),
+        )
+        .route(
+            "/api/v1/alert-silences",
+            get(api::list_alert_silences).post(api::create_alert_silence),
+        )
+        .route(
+            "/api/v1/alert-silences/:id",
+            axum::routing::delete(api::delete_alert_silence),
         );
 
     // Apply auth middleware only if auth is enabled and required

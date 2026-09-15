@@ -1,23 +1,23 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, AlertCircle, Loader, Wifi, WifiOff } from 'lucide-react';
+import { ArrowLeft, AlertCircle, Loader, Radio, ShieldCheck } from 'lucide-react';
 import StatusBadge from '@/components/StatusBadge';
 import MetricsSection from '@/components/MetricsSection';
-import ChartsSection from '@/components/ChartsSection';
 import AlertThresholdChart from '@/components/AlertThresholdChart';
 import ConnectionStatus from '@/components/ConnectionStatus';
 import ProcessWatch from '@/components/ProcessWatch';
+import IncidentTimeline from '@/components/IncidentTimeline';
+import { getEffectiveAlertRules, type AlertRule } from '@/lib/alerts-api';
 import { formatRelativeTime } from '@/lib/metrics-utils';
 import { Agent, LatestMetrics, Metric } from '@/types';
 import { useMetricsWebSocket } from '@/hooks/useWebSocket';
-import { WsMetricMessage, WsAgentSnapshot, WsMetricSnapshot } from '@/lib/websocket';
+import { ProcessSnapshot, WsMetricMessage, WsAgentSnapshot, WsMetricSnapshot, WsProcessSnapshotMessage } from '@/lib/websocket';
 
 export default function ServerDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const agentId = decodeURIComponent(params.agentId as string);
 
   const [agent, setAgent] = useState<Agent | null>(null);
@@ -25,6 +25,25 @@ export default function ServerDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState(new Date());
+  const [processes, setProcesses] = useState<ProcessSnapshot[]>([]);
+  const [processesUpdatedAt, setProcessesUpdatedAt] = useState<string | null>(null);
+  const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    getEffectiveAlertRules(agentId)
+      .then(result => { if (active) setAlertRules(result.rules); })
+      .catch(error => console.error('Failed to load effective alert rules:', error));
+    return () => { active = false; };
+  }, [agentId]);
+
+  const thresholdsFor = useCallback((metric: string) => {
+    const metricRules = alertRules.filter(rule => rule.metric === metric && rule.condition === 'greater_than');
+    return {
+      warning: metricRules.filter(rule => rule.severity === 'warning').map(rule => rule.threshold).sort((a, b) => a - b)[0],
+      critical: metricRules.filter(rule => rule.severity === 'critical').map(rule => rule.threshold).sort((a, b) => a - b)[0],
+    };
+  }, [alertRules]);
 
   // Handle initial state from WebSocket - replaces HTTP fetch
   const handleInitialState = useCallback((agents: WsAgentSnapshot[], metricsSnapshots: WsMetricSnapshot[]) => {
@@ -104,9 +123,16 @@ export default function ServerDetailPage() {
     setAgent(prev => prev ? { ...prev, last_seen: metricMessage.timestamp } : prev);
   }, [agentId]);
 
+  const handleProcessSnapshot = useCallback((message: WsProcessSnapshotMessage) => {
+    if (message.agent_id !== agentId) return;
+    setProcesses(message.processes);
+    setProcessesUpdatedAt(message.timestamp);
+  }, [agentId]);
+
   // Connect to WebSocket - this is the ONLY data source
   const { isConnected, connectionState, initialStateReceived } = useMetricsWebSocket({
     onMetric: handleMetricUpdate,
+    onProcessSnapshot: handleProcessSnapshot,
     onInitialState: handleInitialState,
   });
 
@@ -167,39 +193,56 @@ export default function ServerDetailPage() {
             <h2 className="text-2xl font-bold text-foreground mb-6">Current Metrics</h2>
             <MetricsSection metrics={metrics} loading={loading} />
 
-            <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Process Watch</h2>
-            <ProcessWatch metrics={metrics} />
+            <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Process Explorer</h2>
+            <ProcessWatch processes={processes} updatedAt={processesUpdatedAt} />
 
-            <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Alert Thresholds</h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-12">
+            <div className="mt-12">
+              <IncidentTimeline agentId={agentId} />
+            </div>
+
+            <div className="mb-6 mt-12 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-accent">
+                  <ShieldCheck className="h-4 w-4" /> Operational guardrails
+                </div>
+                <h2 className="text-2xl font-bold text-foreground">Capacity & Alert Thresholds</h2>
+                <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+                  Live saturation, headroom, and threshold proximity for the resources that most often cause incidents.
+                </p>
+              </div>
+              <div className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs font-medium text-emerald-300">
+                <Radio className="h-3.5 w-3.5" /> 2 second live samples
+              </div>
+            </div>
+            <div className="grid grid-cols-1 gap-8 mb-12">
               <AlertThresholdChart
                 agentId={agentId}
                 metric="cpu_usage"
-                title="CPU Usage with Thresholds"
-                warningThreshold={70}
-                criticalThreshold={90}
-                limit={100}
+                title="CPU utilization"
+                warningThreshold={thresholdsFor('cpu_usage').warning}
+                criticalThreshold={thresholdsFor('cpu_usage').critical}
+                limit={120}
+                liveMetric={metrics?.metrics.find(item => item.name === 'cpu_usage')}
               />
               <AlertThresholdChart
                 agentId={agentId}
                 metric="memory_usage"
-                title="Memory Usage with Thresholds"
-                warningThreshold={75}
-                criticalThreshold={90}
-                limit={100}
+                title="Memory pressure"
+                warningThreshold={thresholdsFor('memory_usage').warning}
+                criticalThreshold={thresholdsFor('memory_usage').critical}
+                limit={120}
+                liveMetric={metrics?.metrics.find(item => item.name === 'memory_usage')}
               />
               <AlertThresholdChart
                 agentId={agentId}
                 metric="disk_usage"
-                title="Disk Usage with Thresholds"
-                warningThreshold={80}
-                criticalThreshold={95}
-                limit={100}
+                title="Disk capacity"
+                warningThreshold={thresholdsFor('disk_usage').warning}
+                criticalThreshold={thresholdsFor('disk_usage').critical}
+                limit={120}
+                liveMetric={metrics?.metrics.find(item => item.name === 'disk_usage')}
               />
             </div>
-
-            <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Historical Charts</h2>
-            <ChartsSection agentId={agentId} />
 
             {/* WebSocket Status Footer */}
             <div className="mt-12 pt-8 border-t border-border flex items-center justify-between">

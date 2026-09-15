@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Plus, AlertTriangle } from 'lucide-react';
-import { createAlertRule } from '@/lib/alerts-api';
+import { createAlertRule, getNotificationChannels, type NotificationChannel } from '@/lib/alerts-api';
 
 const COMMON_METRICS = [
   { value: 'cpu_usage', label: 'CPU Usage (%)' },
@@ -22,6 +22,11 @@ export default function NewAlertRulePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notificationChannels, setNotificationChannels] = useState<NotificationChannel[]>([]);
+
+  useEffect(() => {
+    getNotificationChannels().then(setNotificationChannels).catch(error => console.error('Failed to load notification channels:', error));
+  }, []);
   
   const [formData, setFormData] = useState({
     name: '',
@@ -231,6 +236,28 @@ export default function NewAlertRulePage() {
         {/* Advanced Settings */}
         <div className="space-y-4">
           <h2 className="text-xl font-semibold">Advanced Settings</h2>
+
+          <div>
+            <label className="block text-sm font-medium mb-2">Notification destinations</label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {notificationChannels.map(channel => (
+                <label key={channel.id} className="flex cursor-pointer items-center gap-3 rounded-xl border border-gray-700 p-3 hover:border-primary/50">
+                  <input
+                    type="checkbox"
+                    checked={formData.channels.includes(channel.id)}
+                    onChange={event => setFormData(previous => ({
+                      ...previous,
+                      channels: event.target.checked
+                        ? [...previous.channels, channel.id]
+                        : previous.channels.filter(id => id !== channel.id),
+                    }))}
+                  />
+                  <span><span className="block text-sm font-medium">{channel.name}</span><span className="text-xs text-muted-foreground">{channel.channel_type.replace('_', ' ')}</span></span>
+                </label>
+              ))}
+            </div>
+            {notificationChannels.length === 0 && <p className="text-xs text-amber-300">No notification destination is configured. Create one from the Alerts page first.</p>}
+          </div>
           
           <div>
             <label className="block text-sm font-medium mb-2">

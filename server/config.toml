@@ -25,8 +25,10 @@ minute_interval_hours = 1
 hour_interval_hours = 24
 
 [alerts]
-# Check alert rules every 30 seconds
-check_interval_seconds = 30
+# Evaluate alert transitions frequently while rule durations prevent noisy firing.
+check_interval_seconds = 5
+# Fire the built-in agent-offline incident after this heartbeat gap.
+offline_after_seconds = 60
 
 [database]
 enabled = true

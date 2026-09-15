@@ -13,6 +13,34 @@ export type WsMetricMessage = {
   timestamp: string;
 };
 
+export type WsMetricBatchMessage = {
+  type: "metric_batch";
+  agent_id: string;
+  metrics: Record<string, number>;
+  timestamp: string;
+};
+
+export type ProcessSnapshot = {
+  pid: number;
+  parent_pid: number | null;
+  user: string;
+  state: string;
+  cpu_percent: number;
+  memory_bytes: number;
+  virtual_memory_bytes: number;
+  disk_read_bytes: number;
+  disk_written_bytes: number;
+  run_time_seconds: number;
+  command: string;
+};
+
+export type WsProcessSnapshotMessage = {
+  type: "process_snapshot";
+  agent_id: string;
+  processes: ProcessSnapshot[];
+  timestamp: string;
+};
+
 export type WsLogMessage = {
   type: "log";
   agent_id: string;
@@ -62,6 +90,8 @@ export type WsHeartbeat = { type: "heartbeat" };
 
 export type WsMessage =
   | WsMetricMessage
+  | WsMetricBatchMessage
+  | WsProcessSnapshotMessage
   | WsLogMessage
   | WsAlertMessage
   | WsInitialStateMessage

@@ -77,6 +77,8 @@ pub struct AggregationConfig {
 pub struct AlertsConfig {
     #[serde(default = "default_check_interval_seconds")]
     pub check_interval_seconds: u64,
+    #[serde(default = "default_offline_after_seconds")]
+    pub offline_after_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,7 +156,11 @@ fn default_hour_interval_hours() -> u64 {
 }
 
 fn default_check_interval_seconds() -> u64 {
-    30 // Check alerts every 30 seconds
+    5
+}
+
+fn default_offline_after_seconds() -> u64 {
+    60
 }
 
 fn default_max_connections() -> usize {
@@ -199,6 +205,7 @@ impl Default for AlertsConfig {
     fn default() -> Self {
         Self {
             check_interval_seconds: default_check_interval_seconds(),
+            offline_after_seconds: default_offline_after_seconds(),
         }
     }
 }
@@ -298,6 +305,17 @@ impl Config {
                 if interval > 0 {
                     self.storage.persistence_interval_seconds = interval;
                 }
+            }
+        }
+
+        if let Ok(interval) = std::env::var("ALERT_CHECK_INTERVAL_SECONDS") {
+            if let Ok(interval) = interval.parse::<u64>() {
+                self.alerts.check_interval_seconds = interval.max(1);
+            }
+        }
+        if let Ok(seconds) = std::env::var("AGENT_OFFLINE_AFTER_SECONDS") {
+            if let Ok(seconds) = seconds.parse::<u64>() {
+                self.alerts.offline_after_seconds = seconds.max(10);
             }
         }
     }

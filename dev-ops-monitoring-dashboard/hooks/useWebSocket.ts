@@ -6,6 +6,8 @@ import {
   createWebSocketManager,
   WsMessage,
   WsMetricMessage,
+  WsMetricBatchMessage,
+  WsProcessSnapshotMessage,
   WsLogMessage,
   WsAlertMessage,
   WsInitialStateMessage,
@@ -15,6 +17,7 @@ import {
 
 export interface MetricsWebSocketCallbacks {
   onMetric?: (message: WsMetricMessage) => void;
+  onProcessSnapshot?: (message: WsProcessSnapshotMessage) => void;
   onInitialState?: (agents: WsAgentSnapshot[], metrics: WsMetricSnapshot[]) => void;
 }
 
@@ -80,6 +83,25 @@ export function useMetricsWebSocket(callbacks: MetricsWebSocketCallbacks | ((mes
           (message as WsMetricMessage).value
         );
         callbacksRef.current.onMetric?.(message as WsMetricMessage);
+        return;
+      }
+
+      if (message.type === "metric_batch") {
+        const batch = message as WsMetricBatchMessage;
+        Object.entries(batch.metrics).forEach(([metric_name, value]) => {
+          callbacksRef.current.onMetric?.({
+            type: "metric",
+            agent_id: batch.agent_id,
+            metric_name,
+            value,
+            timestamp: batch.timestamp,
+          });
+        });
+        return;
+      }
+
+      if (message.type === "process_snapshot") {
+        callbacksRef.current.onProcessSnapshot?.(message as WsProcessSnapshotMessage);
       }
     });
 

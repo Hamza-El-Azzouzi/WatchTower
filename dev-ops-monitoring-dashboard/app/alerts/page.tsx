@@ -7,6 +7,7 @@ import { getAlerts, getAlertRules, acknowledgeAlert, deleteAlertRule, toggleAler
 import { AlertDetailModal } from '@/components/AlertDetailModal';
 import { useAlertsWebSocket } from '@/hooks/useWebSocket';
 import { WsAlertMessage } from '@/lib/websocket';
+import AlertingOperations from '@/components/AlertingOperations';
 
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -129,6 +130,8 @@ export default function AlertsPage() {
           <div className="text-3xl font-bold text-blue-400">{rules.length}</div>
         </div>
       </div>
+
+      {isAdmin && <AlertingOperations rules={rules} />}
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6 border-b border-gray-700">
@@ -412,6 +415,9 @@ function RuleCard({ rule, onUpdate }: { rule: AlertRule; onUpdate: () => void })
           <p className="font-medium">{rule.cooldown_seconds}s</p>
         </div>
       </div>
+      <p className="mb-4 text-xs text-muted-foreground">
+        {rule.channels.length > 0 ? `${rule.channels.length} notification destination${rule.channels.length === 1 ? '' : 's'}` : 'Dashboard only — no external notification destination'}
+      </p>
       
       <div className="flex gap-2 pt-4 border-t border-border">
         <button

@@ -6,7 +6,11 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{Postgres, QueryBuilder, Row};
 use tracing::info;
 
-use crate::alerts::{Alert, AlertCondition, AlertRule, AlertSeverity, AlertState};
+use crate::alerts::{
+    Alert, AlertCondition, AlertRule, AlertSeverity, AlertSilence, AlertState,
+    CreateAlertSilenceRequest, CreateNotificationChannelRequest, IncidentEvent,
+    NotificationChannel, NotificationChannelType, NotificationDelivery, PendingNotification,
+};
 
 pub struct Database {
     pool: PgPool,
@@ -1049,6 +1053,376 @@ impl Database {
             acknowledged_by: row.get("acknowledged_by"),
             last_notification_at: row.get("last_notification_at"),
         })
+    }
+
+    // ============ Production alerting ============
+
+    pub async fn create_notification_channel(
+        &self,
+        request: &CreateNotificationChannelRequest,
+    ) -> Result<NotificationChannel> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let row = sqlx::query(
+            r#"INSERT INTO notification_channels (
+                id, name, channel_type, webhook_url, email_to, smtp_host, smtp_port,
+                smtp_username, smtp_password, smtp_from, smtp_tls
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            RETURNING id, name, channel_type, webhook_url, email_to, smtp_host, smtp_port,
+                      smtp_username, smtp_password, smtp_from, smtp_tls, enabled, created_at, updated_at"#,
+        )
+        .bind(id)
+        .bind(request.name.trim())
+        .bind(request.channel_type.as_str())
+        .bind(request.webhook_url.as_deref())
+        .bind(request.email_to.as_deref())
+        .bind(request.smtp_host.as_deref())
+        .bind(request.smtp_port)
+        .bind(request.smtp_username.as_deref())
+        .bind(request.smtp_password.as_deref())
+        .bind(request.smtp_from.as_deref())
+        .bind(request.smtp_tls)
+        .fetch_one(&self.pool)
+        .await
+        .context("Failed to create notification channel")?;
+        Self::row_to_notification_channel(row)
+    }
+
+    pub async fn list_notification_channels(&self) -> Result<Vec<NotificationChannel>> {
+        let rows = sqlx::query(
+            r#"SELECT id, name, channel_type, webhook_url, email_to, smtp_host, smtp_port,
+                      smtp_username, smtp_password, smtp_from, smtp_tls, enabled, created_at, updated_at
+               FROM notification_channels ORDER BY name"#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(Self::row_to_notification_channel)
+            .collect()
+    }
+
+    pub async fn get_notification_channel(&self, id: &str) -> Result<Option<NotificationChannel>> {
+        let row = sqlx::query(
+            r#"SELECT id, name, channel_type, webhook_url, email_to, smtp_host, smtp_port,
+                      smtp_username, smtp_password, smtp_from, smtp_tls, enabled, created_at, updated_at
+               FROM notification_channels WHERE id = $1"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(Self::row_to_notification_channel).transpose()
+    }
+
+    pub async fn set_notification_channel_enabled(&self, id: &str, enabled: bool) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE notification_channels SET enabled = $2, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(enabled)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn delete_notification_channel(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM notification_channels WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    fn row_to_notification_channel(row: sqlx::postgres::PgRow) -> Result<NotificationChannel> {
+        let channel_type = match row.get::<String, _>("channel_type").as_str() {
+            "slack" => NotificationChannelType::Slack,
+            "discord" => NotificationChannelType::Discord,
+            "email" => NotificationChannelType::Email,
+            _ => NotificationChannelType::GenericWebhook,
+        };
+        Ok(NotificationChannel {
+            id: row.get("id"),
+            name: row.get("name"),
+            channel_type,
+            webhook_url: row.get("webhook_url"),
+            email_to: row.get("email_to"),
+            smtp_host: row.get("smtp_host"),
+            smtp_port: row.get("smtp_port"),
+            smtp_username: row.get("smtp_username"),
+            smtp_password: row.get("smtp_password"),
+            smtp_from: row.get("smtp_from"),
+            smtp_tls: row.get("smtp_tls"),
+            enabled: row.get("enabled"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        })
+    }
+
+    pub async fn create_alert_silence(
+        &self,
+        request: &CreateAlertSilenceRequest,
+    ) -> Result<AlertSilence> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let row = sqlx::query(
+            r#"INSERT INTO alert_silences
+               (id, name, reason, rule_id, agent_id, starts_at, ends_at, created_by)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+               RETURNING id, name, reason, rule_id, agent_id, starts_at, ends_at, created_by, created_at"#,
+        )
+        .bind(id)
+        .bind(request.name.trim())
+        .bind(request.reason.as_deref())
+        .bind(request.rule_id.as_deref())
+        .bind(request.agent_id.as_deref())
+        .bind(request.starts_at)
+        .bind(request.ends_at)
+        .bind(request.created_by.trim())
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(Self::row_to_alert_silence(row))
+    }
+
+    pub async fn list_alert_silences(&self, active_only: bool) -> Result<Vec<AlertSilence>> {
+        let rows = sqlx::query(
+            r#"SELECT id, name, reason, rule_id, agent_id, starts_at, ends_at, created_by, created_at
+               FROM alert_silences
+               WHERE NOT $1 OR (starts_at <= NOW() AND ends_at > NOW())
+               ORDER BY starts_at DESC"#,
+        )
+        .bind(active_only)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(Self::row_to_alert_silence).collect())
+    }
+
+    pub async fn delete_alert_silence(&self, id: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM alert_silences WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn is_alert_silenced(&self, rule_id: &str, agent_id: &str) -> Result<bool> {
+        let silenced = sqlx::query_scalar::<_, bool>(
+            r#"SELECT EXISTS(
+                 SELECT 1 FROM alert_silences
+                 WHERE starts_at <= NOW() AND ends_at > NOW()
+                   AND (rule_id IS NULL OR rule_id = $1)
+                   AND (agent_id IS NULL OR agent_id = $2)
+               )"#,
+        )
+        .bind(rule_id)
+        .bind(agent_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(silenced)
+    }
+
+    fn row_to_alert_silence(row: sqlx::postgres::PgRow) -> AlertSilence {
+        AlertSilence {
+            id: row.get("id"),
+            name: row.get("name"),
+            reason: row.get("reason"),
+            rule_id: row.get("rule_id"),
+            agent_id: row.get("agent_id"),
+            starts_at: row.get("starts_at"),
+            ends_at: row.get("ends_at"),
+            created_by: row.get("created_by"),
+            created_at: row.get("created_at"),
+        }
+    }
+
+    pub async fn enqueue_notification(
+        &self,
+        alert_id: &str,
+        channel: &NotificationChannel,
+        event_type: &str,
+        payload: &serde_json::Value,
+    ) -> Result<i64> {
+        let id = sqlx::query_scalar::<_, i64>(
+            r#"INSERT INTO notification_deliveries
+               (alert_id, channel_id, channel_name, event_type, status, payload)
+               VALUES ($1,$2,$3,$4,'pending',$5) RETURNING id"#,
+        )
+        .bind(alert_id)
+        .bind(&channel.id)
+        .bind(&channel.name)
+        .bind(event_type)
+        .bind(payload)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    pub async fn claim_due_notifications(&self, limit: i64) -> Result<Vec<PendingNotification>> {
+        let rows = sqlx::query(
+            r#"SELECT d.id, d.alert_id, d.channel_id, d.channel_name, d.event_type,
+                      d.status, d.attempt_count, d.response_status, d.error_message,
+                      d.created_at, d.delivered_at, d.next_attempt_at, d.last_attempt_at,
+                      d.max_attempts, d.payload,
+                      c.id AS c_id, c.name AS c_name, c.channel_type, c.webhook_url,
+                      c.email_to, c.smtp_host, c.smtp_port, c.smtp_username, c.smtp_password,
+                      c.smtp_from, c.smtp_tls, c.enabled, c.created_at AS c_created_at,
+                      c.updated_at AS c_updated_at
+               FROM notification_deliveries d
+               JOIN notification_channels c ON c.id = d.channel_id
+               WHERE d.status IN ('pending','failed')
+                 AND d.attempt_count < d.max_attempts
+                 AND d.next_attempt_at <= NOW()
+                 AND c.enabled
+               ORDER BY d.next_attempt_at
+               LIMIT $1"#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let channel_type = match row.get::<String, _>("channel_type").as_str() {
+                    "slack" => NotificationChannelType::Slack,
+                    "discord" => NotificationChannelType::Discord,
+                    "email" => NotificationChannelType::Email,
+                    _ => NotificationChannelType::GenericWebhook,
+                };
+                Ok(PendingNotification {
+                    delivery: NotificationDelivery {
+                        id: row.get("id"),
+                        alert_id: row.get("alert_id"),
+                        channel_id: row.get("channel_id"),
+                        channel_name: row.get("channel_name"),
+                        event_type: row.get("event_type"),
+                        status: row.get("status"),
+                        attempt_count: row.get("attempt_count"),
+                        response_status: row.get("response_status"),
+                        error_message: row.get("error_message"),
+                        created_at: row.get("created_at"),
+                        delivered_at: row.get("delivered_at"),
+                        next_attempt_at: row.get("next_attempt_at"),
+                        last_attempt_at: row.get("last_attempt_at"),
+                        max_attempts: row.get("max_attempts"),
+                    },
+                    payload: row.get("payload"),
+                    channel: NotificationChannel {
+                        id: row.get("c_id"),
+                        name: row.get("c_name"),
+                        channel_type,
+                        webhook_url: row.get("webhook_url"),
+                        email_to: row.get("email_to"),
+                        smtp_host: row.get("smtp_host"),
+                        smtp_port: row.get("smtp_port"),
+                        smtp_username: row.get("smtp_username"),
+                        smtp_password: row.get("smtp_password"),
+                        smtp_from: row.get("smtp_from"),
+                        smtp_tls: row.get("smtp_tls"),
+                        enabled: row.get("enabled"),
+                        created_at: row.get("c_created_at"),
+                        updated_at: row.get("c_updated_at"),
+                    },
+                })
+            })
+            .collect()
+    }
+
+    pub async fn finish_notification_attempt(
+        &self,
+        id: i64,
+        delivered: bool,
+        response_status: Option<i32>,
+        error_message: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"UPDATE notification_deliveries SET
+                 status = CASE WHEN $2 THEN 'delivered' ELSE 'failed' END,
+                 attempt_count = attempt_count + 1,
+                 response_status = $3,
+                 error_message = $4,
+                 last_attempt_at = NOW(),
+                 delivered_at = CASE WHEN $2 THEN NOW() ELSE delivered_at END,
+                 next_attempt_at = CASE WHEN $2 THEN next_attempt_at
+                   ELSE NOW() + make_interval(secs => LEAST(900, (5 * power(2, attempt_count))::int)) END
+               WHERE id = $1"#,
+        )
+        .bind(id).bind(delivered).bind(response_status).bind(error_message)
+        .execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn list_notification_deliveries(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<NotificationDelivery>> {
+        let rows = sqlx::query(
+            r#"SELECT id, alert_id, channel_id, channel_name, event_type, status,
+                      attempt_count, response_status, error_message, created_at, delivered_at,
+                      next_attempt_at, last_attempt_at, max_attempts
+               FROM notification_deliveries ORDER BY created_at DESC LIMIT $1"#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| NotificationDelivery {
+                id: row.get("id"),
+                alert_id: row.get("alert_id"),
+                channel_id: row.get("channel_id"),
+                channel_name: row.get("channel_name"),
+                event_type: row.get("event_type"),
+                status: row.get("status"),
+                attempt_count: row.get("attempt_count"),
+                response_status: row.get("response_status"),
+                error_message: row.get("error_message"),
+                created_at: row.get("created_at"),
+                delivered_at: row.get("delivered_at"),
+                next_attempt_at: row.get("next_attempt_at"),
+                last_attempt_at: row.get("last_attempt_at"),
+                max_attempts: row.get("max_attempts"),
+            })
+            .collect())
+    }
+
+    pub async fn insert_incident_event(&self, event: &IncidentEvent) -> Result<()> {
+        sqlx::query(
+            r#"INSERT INTO incident_events
+               (event_id, alert_id, rule_id, agent_id, event_type, severity, title, description, metadata, occurred_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (event_id) DO NOTHING"#,
+        )
+        .bind(&event.event_id).bind(&event.alert_id).bind(&event.rule_id).bind(&event.agent_id)
+        .bind(&event.event_type).bind(&event.severity).bind(&event.title).bind(&event.description)
+        .bind(&event.metadata).bind(event.occurred_at).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn list_incident_events(
+        &self,
+        agent_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<IncidentEvent>> {
+        let rows = sqlx::query(
+            r#"SELECT event_id, alert_id, rule_id, agent_id, event_type, severity,
+                      title, description, metadata, occurred_at
+               FROM incident_events WHERE ($1::text IS NULL OR agent_id = $1)
+               ORDER BY occurred_at DESC LIMIT $2"#,
+        )
+        .bind(agent_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| IncidentEvent {
+                event_id: row.get("event_id"),
+                alert_id: row.get("alert_id"),
+                rule_id: row.get("rule_id"),
+                agent_id: row.get("agent_id"),
+                event_type: row.get("event_type"),
+                severity: row.get("severity"),
+                title: row.get("title"),
+                description: row.get("description"),
+                metadata: row.get("metadata"),
+                occurred_at: row.get("occurred_at"),
+            })
+            .collect())
     }
 
     // ============ Agent Requests CRUD ============

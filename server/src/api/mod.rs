@@ -117,6 +117,7 @@ pub struct AppState {
     pub ws_manager: Arc<WebSocketManager>,
     metrics_persistence_interval: Duration,
     last_metrics_persistence: Arc<Mutex<HashMap<String, Instant>>>,
+    last_incident_signal: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 impl AppState {
@@ -138,7 +139,24 @@ impl AppState {
                 metrics_persistence_interval_seconds.max(1),
             ),
             last_metrics_persistence: Arc::new(Mutex::new(HashMap::new())),
+            last_incident_signal: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    fn claim_incident_signal(&self, key: &str, cooldown: Duration) -> bool {
+        let now = Instant::now();
+        let mut signals = self
+            .last_incident_signal
+            .lock()
+            .expect("incident signal lock poisoned");
+        if signals
+            .get(key)
+            .is_some_and(|previous| previous.elapsed() < cooldown)
+        {
+            return false;
+        }
+        signals.insert(key.to_string(), now);
+        true
     }
 
     fn claim_metrics_persistence(&self, agent_id: &str) -> bool {
@@ -249,6 +267,47 @@ pub async fn ingest_metrics(
                 processes: payload.processes.clone(),
                 timestamp: payload.timestamp,
             });
+
+        if let Some(process) = payload
+            .processes
+            .iter()
+            .max_by(|left, right| left.cpu_percent.total_cmp(&right.cpu_percent))
+        {
+            let signal_key = format!("process:{}:{}", payload.agent_id, process.pid);
+            if process.cpu_percent >= 80.0
+                && state.claim_incident_signal(&signal_key, Duration::from_secs(60))
+            {
+                if let Some(database) = &state.database {
+                    let database = database.clone();
+                    let event = crate::alerts::IncidentEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        alert_id: None,
+                        rule_id: None,
+                        agent_id: payload.agent_id.clone(),
+                        event_type: "process_spike".to_string(),
+                        severity: "warning".to_string(),
+                        title: format!("CPU spike: {}", process.command),
+                        description: format!(
+                            "PID {} used {:.1}% CPU during this sample",
+                            process.pid, process.cpu_percent
+                        ),
+                        metadata: serde_json::json!({
+                            "pid": process.pid,
+                            "command": process.command,
+                            "user": process.user,
+                            "cpu_percent": process.cpu_percent,
+                            "memory_bytes": process.memory_bytes,
+                        }),
+                        occurred_at: payload.timestamp,
+                    };
+                    tokio::spawn(async move {
+                        if let Err(error) = database.insert_incident_event(&event).await {
+                            tracing::warn!(%error, "Failed to persist process spike event");
+                        }
+                    });
+                }
+            }
+        }
     }
 
     // Persist at a lower cadence in the background. This keeps historical data
@@ -485,7 +544,7 @@ pub async fn list_agents(
     let all_agents = state.store.get_agents();
 
     let filtered_agents = match request_principal(&state, &headers).await? {
-        RequestPrincipal::Admin => all_agents,
+        RequestPrincipal::Admin(_) => all_agents,
         RequestPrincipal::ApiKey(key_id) => {
             let allowed = tenant_agent_ids(&state, key_id).await?;
             all_agents
@@ -522,7 +581,7 @@ pub async fn get_stats(
     info!("Getting storage statistics");
 
     let stats = match request_principal(&state, &headers).await? {
-        RequestPrincipal::Admin => state.store.get_stats(),
+        RequestPrincipal::Admin(_) => state.store.get_stats(),
         RequestPrincipal::ApiKey(key_id) => {
             let allowed = tenant_agent_ids(&state, key_id).await?;
             state.store.get_stats_for_agents(&allowed)
@@ -605,6 +664,40 @@ pub async fn ingest_logs(
             source: log.source.clone(),
             timestamp: log.timestamp,
         });
+
+        if matches!(
+            log.level,
+            crate::storage::LogLevel::ERROR | crate::storage::LogLevel::FATAL
+        ) {
+            let signal_key = format!("log:{}:{}", payload.agent_id, log.source);
+            if state.claim_incident_signal(&signal_key, Duration::from_secs(30)) {
+                if let Some(database) = &state.database {
+                    let database = database.clone();
+                    let event = crate::alerts::IncidentEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        alert_id: None,
+                        rule_id: None,
+                        agent_id: payload.agent_id.clone(),
+                        event_type: "log_error".to_string(),
+                        severity: if log.level == crate::storage::LogLevel::FATAL {
+                            "critical"
+                        } else {
+                            "warning"
+                        }
+                        .to_string(),
+                        title: format!("{} log from {}", log.level, log.source),
+                        description: log.message.chars().take(1000).collect(),
+                        metadata: serde_json::json!({ "source": log.source, "level": log.level.to_string() }),
+                        occurred_at: log.timestamp,
+                    };
+                    tokio::spawn(async move {
+                        if let Err(error) = database.insert_incident_event(&event).await {
+                            tracing::warn!(%error, "Failed to persist log incident event");
+                        }
+                    });
+                }
+            }
+        }
     }
 
     Ok((
@@ -665,7 +758,7 @@ pub async fn query_logs(
         });
 
     let allowed_agent_ids = match request_principal(&state, &headers).await? {
-        RequestPrincipal::Admin => None,
+        RequestPrincipal::Admin(_) => None,
         RequestPrincipal::ApiKey(key_id) => Some(tenant_agent_ids(&state, key_id).await?),
     };
     if let Some(agent_id) = params.agent_id.as_deref() {
@@ -758,6 +851,34 @@ pub async fn list_alert_rules(
     Ok(Json(crate::alerts::AlertRulesResponse { rules, total }))
 }
 
+#[derive(Debug, Deserialize)]
+pub struct EffectiveRulesQuery {
+    pub agent_id: String,
+}
+
+/// GET /api/v1/alert-rules/effective - Enabled rules applicable to one agent.
+pub async fn list_effective_alert_rules(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<EffectiveRulesQuery>,
+) -> Result<Json<crate::alerts::AlertRulesResponse>, ApiError> {
+    ensure_agent_access(&state, &headers, &query.agent_id).await?;
+    let rules: Vec<_> = state
+        .alert_manager
+        .list_rules()
+        .await
+        .into_iter()
+        .filter(|rule| rule.enabled)
+        .filter(|rule| {
+            rule.agent_filter
+                .as_deref()
+                .is_none_or(|agent| agent == query.agent_id)
+        })
+        .collect();
+    let total = rules.len();
+    Ok(Json(crate::alerts::AlertRulesResponse { rules, total }))
+}
+
 /// GET /api/v1/alert-rules/:id - Get specific alert rule
 pub async fn get_alert_rule(
     State(state): State<Arc<AppState>>,
@@ -831,7 +952,7 @@ pub async fn list_alerts(
 ) -> Result<Json<crate::alerts::AlertsResponse>, ApiError> {
     let all_alerts = state.alert_manager.get_all_alerts().await;
     let filtered_alerts = match request_principal(&state, &headers).await? {
-        RequestPrincipal::Admin => all_alerts,
+        RequestPrincipal::Admin(_) => all_alerts,
         RequestPrincipal::ApiKey(key_id) => {
             let allowed = tenant_agent_ids(&state, key_id).await?;
             all_alerts
@@ -879,24 +1000,272 @@ pub async fn acknowledge_alert(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(alert_id): Path<String>,
-    Json(payload): Json<crate::alerts::AcknowledgeAlertRequest>,
+    Json(_payload): Json<crate::alerts::AcknowledgeAlertRequest>,
 ) -> Result<Json<crate::alerts::Alert>, ApiError> {
     let alert = state
         .alert_manager
         .get_alert(&alert_id)
         .await
         .ok_or_else(|| ApiError::BadRequest(format!("Alert {} not found", alert_id)))?;
-    ensure_agent_access(&state, &headers, &alert.agent_id).await?;
-    info!(
-        "Acknowledging alert: {} by {}",
-        alert_id, payload.acknowledged_by
-    );
+    let acknowledged_by = match request_principal(&state, &headers).await? {
+        RequestPrincipal::Admin(username) => username,
+        RequestPrincipal::ApiKey(key_id) => {
+            if !database(&state)?
+                .agent_belongs_to_api_key(&alert.agent_id, key_id)
+                .await
+                .map_err(|_| {
+                    ApiError::InternalError("Failed to verify agent ownership".to_string())
+                })?
+            {
+                return Err(ApiError::Forbidden(
+                    "Agent is not owned by this tenant".to_string(),
+                ));
+            }
+            format!("api-key-{key_id}")
+        }
+    };
+    info!("Acknowledging alert: {} by {}", alert_id, acknowledged_by);
     state
         .alert_manager
-        .acknowledge_alert(&alert_id, payload.acknowledged_by)
+        .acknowledge_alert(&alert_id, acknowledged_by)
         .await
         .map(Json)
         .ok_or_else(|| ApiError::BadRequest(format!("Alert {} not found", alert_id)))
+}
+
+// ============ Notification, silence, and incident API ============
+
+fn database(state: &AppState) -> Result<Arc<Database>, ApiError> {
+    state
+        .database
+        .clone()
+        .ok_or_else(|| ApiError::InternalError("Database is unavailable".to_string()))
+}
+
+pub async fn create_notification_channel(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<crate::alerts::CreateNotificationChannelRequest>,
+) -> Result<Json<crate::alerts::NotificationChannelView>, ApiError> {
+    require_admin(&state, &headers).await?;
+    if payload.name.trim().is_empty() {
+        return Err(ApiError::BadRequest("Channel name is required".to_string()));
+    }
+    if !matches!(
+        payload.channel_type,
+        crate::alerts::NotificationChannelType::Email
+    ) {
+        let url = payload
+            .webhook_url
+            .as_deref()
+            .ok_or_else(|| ApiError::BadRequest("Webhook URL is required".to_string()))?;
+        crate::alerts::notifications::validate_webhook_url(url)
+            .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    } else if payload.email_to.as_deref().is_none_or(str::is_empty)
+        || payload.smtp_host.as_deref().is_none_or(str::is_empty)
+        || payload.smtp_from.as_deref().is_none_or(str::is_empty)
+    {
+        return Err(ApiError::BadRequest(
+            "Email recipient, SMTP host, and sender are required".to_string(),
+        ));
+    }
+    let channel = database(&state)?
+        .create_notification_channel(&payload)
+        .await
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    Ok(Json((&channel).into()))
+}
+
+pub async fn list_notification_channels(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<crate::alerts::NotificationChannelView>>, ApiError> {
+    require_admin(&state, &headers).await?;
+    let channels = database(&state)?
+        .list_notification_channels()
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?;
+    Ok(Json(channels.iter().map(Into::into).collect()))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetEnabledRequest {
+    pub enabled: bool,
+}
+
+pub async fn set_notification_channel_enabled(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(payload): Json<SetEnabledRequest>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&state, &headers).await?;
+    if database(&state)?
+        .set_notification_channel_enabled(&id, payload.enabled)
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::BadRequest(
+            "Notification channel not found".to_string(),
+        ))
+    }
+}
+
+pub async fn delete_notification_channel(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&state, &headers).await?;
+    if database(&state)?
+        .delete_notification_channel(&id)
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::BadRequest(
+            "Notification channel not found".to_string(),
+        ))
+    }
+}
+
+pub async fn test_notification_channel(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    require_admin(&state, &headers).await?;
+    let db = database(&state)?;
+    let channel = db
+        .get_notification_channel(&id)
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?
+        .ok_or_else(|| ApiError::BadRequest("Notification channel not found".to_string()))?;
+    let dispatcher = crate::alerts::notifications::NotificationDispatcher::new(db)
+        .map_err(|error| ApiError::InternalError(error.to_string()))?;
+    let delivery_id = dispatcher
+        .enqueue_test(&channel)
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "delivery_id": delivery_id })),
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeliveryQuery {
+    pub limit: Option<i64>,
+}
+
+pub async fn list_notification_deliveries(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<DeliveryQuery>,
+) -> Result<Json<Vec<crate::alerts::NotificationDelivery>>, ApiError> {
+    require_admin(&state, &headers).await?;
+    let deliveries = database(&state)?
+        .list_notification_deliveries(query.limit.unwrap_or(100).clamp(1, 500))
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?;
+    Ok(Json(deliveries))
+}
+
+pub async fn create_alert_silence(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<crate::alerts::CreateAlertSilenceRequest>,
+) -> Result<Json<crate::alerts::AlertSilence>, ApiError> {
+    if payload.ends_at <= payload.starts_at {
+        return Err(ApiError::BadRequest(
+            "Silence end must be after its start".to_string(),
+        ));
+    }
+    let admin = require_admin(&state, &headers).await?;
+    let payload = crate::alerts::CreateAlertSilenceRequest {
+        created_by: admin.username,
+        ..payload
+    };
+    let silence = database(&state)?
+        .create_alert_silence(&payload)
+        .await
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    Ok(Json(silence))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SilencesQuery {
+    #[serde(default)]
+    pub active_only: bool,
+}
+
+pub async fn list_alert_silences(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<SilencesQuery>,
+) -> Result<Json<Vec<crate::alerts::AlertSilence>>, ApiError> {
+    require_admin(&state, &headers).await?;
+    let silences = database(&state)?
+        .list_alert_silences(query.active_only)
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?;
+    Ok(Json(silences))
+}
+
+pub async fn delete_alert_silence(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&state, &headers).await?;
+    if database(&state)?
+        .delete_alert_silence(&id)
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::BadRequest("Silence not found".to_string()))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IncidentQuery {
+    pub agent_id: Option<String>,
+    pub limit: Option<i64>,
+}
+
+pub async fn list_incident_timeline(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<IncidentQuery>,
+) -> Result<Json<Vec<crate::alerts::IncidentEvent>>, ApiError> {
+    match request_principal(&state, &headers).await? {
+        RequestPrincipal::Admin(_) => {}
+        RequestPrincipal::ApiKey(key_id) => {
+            let agent_id = query
+                .agent_id
+                .as_deref()
+                .ok_or_else(|| ApiError::BadRequest("agent_id is required".to_string()))?;
+            let allowed = tenant_agent_ids(&state, key_id).await?;
+            if !allowed.iter().any(|allowed_id| allowed_id == agent_id) {
+                return Err(ApiError::Forbidden(
+                    "Agent is not owned by this tenant".to_string(),
+                ));
+            }
+        }
+    }
+    let events = database(&state)?
+        .list_incident_events(
+            query.agent_id.as_deref(),
+            query.limit.unwrap_or(100).clamp(1, 500),
+        )
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?;
+    Ok(Json(events))
 }
 
 /// GET /api/v1/health - System health check endpoint
@@ -1318,7 +1687,7 @@ fn extract_admin_token(headers: &HeaderMap) -> Option<&str> {
 }
 
 enum RequestPrincipal {
-    Admin,
+    Admin(String),
     ApiKey(i64),
 }
 
@@ -1344,13 +1713,12 @@ async fn request_principal(
         .ok_or_else(|| ApiError::InternalError("Authentication is not available".to_string()))?;
 
     if let Some(token) = extract_admin_token(headers) {
-        if auth_service
+        if let Some(admin) = auth_service
             .validate_admin_token(token)
             .await
             .map_err(|_| ApiError::InternalError("Authentication service error".to_string()))?
-            .is_some()
         {
-            return Ok(RequestPrincipal::Admin);
+            return Ok(RequestPrincipal::Admin(admin.username));
         }
     }
 
@@ -1383,7 +1751,7 @@ async fn ensure_agent_access(
     agent_id: &str,
 ) -> Result<(), ApiError> {
     match request_principal(state, headers).await? {
-        RequestPrincipal::Admin => Ok(()),
+        RequestPrincipal::Admin(_) => Ok(()),
         RequestPrincipal::ApiKey(key_id) => {
             let database = state
                 .database

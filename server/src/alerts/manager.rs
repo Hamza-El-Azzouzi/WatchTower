@@ -6,7 +6,8 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use super::{
-    Alert, AlertEvaluation, AlertRule, AlertState, CreateAlertRuleRequest, UpdateAlertRuleRequest,
+    Alert, AlertCondition, AlertEvaluation, AlertEventType, AlertRule, AlertSeverity, AlertState,
+    AlertTransition, CreateAlertRuleRequest, IncidentEvent, UpdateAlertRuleRequest,
 };
 use crate::db::Database;
 use crate::storage::TimeSeriesStore;
@@ -213,21 +214,19 @@ impl AlertManager {
     }
 
     // Alert Evaluation
-    pub async fn evaluate_alerts(&self) -> Vec<Alert> {
-        let rules = self.rules_cache.read().await;
+    pub async fn evaluate_alerts(&self, offline_after_seconds: u64) -> Vec<AlertTransition> {
+        let rules: Vec<AlertRule> = self.rules_cache.read().await.values().cloned().collect();
         let mut alerts = self.alerts_cache.write().await;
         let mut evaluations = self.evaluations.write().await;
-        let mut triggered_alerts: Vec<Alert> = Vec::new();
+        let mut transitions = Vec::new();
+        let agents = self.metrics_storage.get_agents();
 
-        for rule in rules.values() {
+        for rule in &rules {
             if !rule.enabled {
                 continue;
             }
 
-            // Get all agents
-            let agents = self.metrics_storage.get_agents();
-
-            for agent in agents {
+            for agent in &agents {
                 // Apply agent filter if specified
                 if let Some(filter) = &rule.agent_filter {
                     if &agent.id != filter {
@@ -257,71 +256,128 @@ impl AlertManager {
                                 (now - eval.first_triggered_at).num_seconds() as u64;
 
                             if duration_elapsed >= rule.duration_seconds {
-                                // Find or create alert
-                                let alert_id = format!("{}:{}", rule.id, agent.id);
-
-                                if let Some(alert) = alerts.get_mut(&alert_id) {
-                                    // Update existing alert
+                                if let Some(alert) = alerts.values_mut().find(|alert| {
+                                    alert.rule_id == rule.id
+                                        && alert.agent_id == agent.id
+                                        && alert.is_active()
+                                }) {
                                     alert.current_value = value;
-
                                     if alert.state == AlertState::Pending {
                                         alert.state = AlertState::Firing;
-                                        // Save to database
+                                        alert.triggered_at = now;
                                         self.persist_alert(alert.clone());
-                                        triggered_alerts.push(alert.clone());
-                                    } else if alert.state == AlertState::Firing {
-                                        // Check if we should re-notify based on cooldown
-                                        if alert.should_notify(rule.cooldown_seconds) {
-                                            triggered_alerts.push(alert.clone());
-                                        }
+                                        self.record_incident(alert, "firing");
+                                        transitions.push(AlertTransition {
+                                            alert: alert.clone(),
+                                            event_type: AlertEventType::Firing,
+                                            channel_ids: rule.channels.clone(),
+                                        });
+                                    } else if alert.should_notify(rule.cooldown_seconds) {
+                                        transitions.push(AlertTransition {
+                                            alert: alert.clone(),
+                                            event_type: AlertEventType::Firing,
+                                            channel_ids: rule.channels.clone(),
+                                        });
                                     }
-                                } else {
-                                    // Create new alert in firing state
-                                    let mut alert = Alert::new(
-                                        rule,
-                                        agent.id.clone(),
-                                        agent.name.clone(),
-                                        value,
-                                    );
-                                    alert.state = AlertState::Firing;
-                                    // Save to database
-                                    self.persist_alert(alert.clone());
-                                    alerts.insert(alert_id, alert.clone());
-                                    triggered_alerts.push(alert);
                                 }
                             }
                         } else {
-                            // First time condition is met - create evaluation record
-                            evaluations.insert(
-                                eval_key.clone(),
-                                AlertEvaluation {
-                                    rule_id: rule.id.clone(),
-                                    agent_id: agent.id.clone(),
-                                    first_triggered_at: now,
-                                    last_evaluated_at: now,
-                                },
-                            );
+                            let existing_id = alerts
+                                .values()
+                                .find(|alert| {
+                                    alert.rule_id == rule.id
+                                        && alert.agent_id == agent.id
+                                        && alert.is_active()
+                                })
+                                .map(|alert| alert.id.clone());
 
-                            // Create pending alert
-                            let alert_id = format!("{}:{}", rule.id, agent.id);
-                            let alert =
-                                Alert::new(rule, agent.id.clone(), agent.name.clone(), value);
-                            // Save to database
-                            self.persist_alert(alert.clone());
-                            alerts.insert(alert_id, alert);
+                            if let Some(existing_id) = existing_id {
+                                // Rehydrate evaluator state after a server restart instead of
+                                // opening a duplicate incident for the same active condition.
+                                if let Some(alert) = alerts.get_mut(&existing_id) {
+                                    alert.current_value = value;
+                                    evaluations.insert(
+                                        eval_key.clone(),
+                                        AlertEvaluation {
+                                            rule_id: rule.id.clone(),
+                                            agent_id: agent.id.clone(),
+                                            first_triggered_at: alert.triggered_at,
+                                            last_evaluated_at: now,
+                                        },
+                                    );
+                                    if alert.should_notify(rule.cooldown_seconds) {
+                                        transitions.push(AlertTransition {
+                                            alert: alert.clone(),
+                                            event_type: AlertEventType::Firing,
+                                            channel_ids: rule.channels.clone(),
+                                        });
+                                    }
+                                }
+                            } else {
+                                evaluations.insert(
+                                    eval_key.clone(),
+                                    AlertEvaluation {
+                                        rule_id: rule.id.clone(),
+                                        agent_id: agent.id.clone(),
+                                        first_triggered_at: now,
+                                        last_evaluated_at: now,
+                                    },
+                                );
+
+                                let mut alert =
+                                    Alert::new(rule, agent.id.clone(), agent.name.clone(), value);
+                                let fires_immediately = rule.duration_seconds == 0;
+                                if fires_immediately {
+                                    alert.state = AlertState::Firing;
+                                }
+                                self.persist_alert(alert.clone());
+                                self.record_incident(
+                                    &alert,
+                                    if fires_immediately {
+                                        "firing"
+                                    } else {
+                                        "pending"
+                                    },
+                                );
+                                if fires_immediately {
+                                    transitions.push(AlertTransition {
+                                        alert: alert.clone(),
+                                        event_type: AlertEventType::Firing,
+                                        channel_ids: rule.channels.clone(),
+                                    });
+                                }
+                                alerts.insert(alert.id.clone(), alert);
+                            }
                         }
                     } else {
-                        // Condition no longer met - resolve alert
                         let eval_key = format!("{}:{}", rule.id, agent.id);
                         evaluations.remove(&eval_key);
-
-                        let alert_id = format!("{}:{}", rule.id, agent.id);
-                        if let Some(alert) = alerts.get_mut(&alert_id) {
-                            if alert.is_active() {
-                                alert.state = AlertState::Resolved;
-                                alert.resolved_at = Some(Utc::now());
-                                // Save to database
-                                self.persist_alert(alert.clone());
+                        if let Some(alert) = alerts.values_mut().find(|alert| {
+                            alert.rule_id == rule.id
+                                && alert.agent_id == agent.id
+                                && alert.is_active()
+                        }) {
+                            let was_firing = alert.state == AlertState::Firing;
+                            alert.state = AlertState::Resolved;
+                            alert.resolved_at = Some(Utc::now());
+                            alert.current_value = value;
+                            alert.message = format!(
+                                "✅ {} on {} recovered: {} is {} (threshold {} {})",
+                                alert.rule_name,
+                                alert.agent_name,
+                                alert.metric,
+                                value,
+                                alert.condition.symbol(),
+                                alert.threshold
+                            );
+                            self.persist_alert(alert.clone());
+                            self.record_incident(alert, "recovery");
+                            if was_firing {
+                                transitions.push(AlertTransition {
+                                    alert: alert.clone(),
+                                    event_type: AlertEventType::Resolved,
+                                    channel_ids: rule.channels.clone(),
+                                });
                             }
                         }
                     }
@@ -329,7 +385,93 @@ impl AlertManager {
             }
         }
 
-        triggered_alerts
+        self.evaluate_offline_agents(
+            &agents,
+            offline_after_seconds,
+            &mut alerts,
+            &mut transitions,
+        );
+
+        transitions
+    }
+
+    fn evaluate_offline_agents(
+        &self,
+        agents: &[crate::storage::Agent],
+        offline_after_seconds: u64,
+        alerts: &mut HashMap<String, Alert>,
+        transitions: &mut Vec<AlertTransition>,
+    ) {
+        const RULE_ID: &str = "system-agent-offline";
+        for agent in agents {
+            let age = Utc::now()
+                .signed_duration_since(agent.last_seen)
+                .num_seconds()
+                .max(0) as u64;
+            let active_id = alerts
+                .values()
+                .find(|alert| {
+                    alert.rule_id == RULE_ID && alert.agent_id == agent.id && alert.is_active()
+                })
+                .map(|alert| alert.id.clone());
+
+            if age >= offline_after_seconds {
+                if active_id.is_none() {
+                    let alert = Alert {
+                        id: Uuid::new_v4().to_string(),
+                        rule_id: RULE_ID.to_string(),
+                        rule_name: "Agent offline".to_string(),
+                        agent_id: agent.id.clone(),
+                        agent_name: agent.name.clone(),
+                        state: AlertState::Firing,
+                        metric: "agent_heartbeat_age_seconds".to_string(),
+                        current_value: age as f64,
+                        threshold: offline_after_seconds as f64,
+                        condition: AlertCondition::GreaterThan,
+                        severity: AlertSeverity::Critical,
+                        message: format!(
+                            "Agent {} has not reported for {} seconds",
+                            agent.name, age
+                        ),
+                        triggered_at: Utc::now(),
+                        resolved_at: None,
+                        acknowledged: false,
+                        acknowledged_at: None,
+                        acknowledged_by: None,
+                        last_notification_at: None,
+                    };
+                    self.persist_alert(alert.clone());
+                    self.record_incident(&alert, "firing");
+                    transitions.push(AlertTransition {
+                        alert: alert.clone(),
+                        event_type: AlertEventType::Firing,
+                        channel_ids: Vec::new(), // Built-in health alerts use all enabled channels.
+                    });
+                    alerts.insert(alert.id.clone(), alert);
+                } else if let Some(alert) = active_id.and_then(|id| alerts.get_mut(&id)) {
+                    alert.current_value = age as f64;
+                    if alert.should_notify(300) {
+                        transitions.push(AlertTransition {
+                            alert: alert.clone(),
+                            event_type: AlertEventType::Firing,
+                            channel_ids: Vec::new(),
+                        });
+                    }
+                }
+            } else if let Some(alert) = active_id.and_then(|id| alerts.get_mut(&id)) {
+                alert.state = AlertState::Resolved;
+                alert.current_value = age as f64;
+                alert.resolved_at = Some(Utc::now());
+                alert.message = format!("Agent {} resumed reporting", agent.name);
+                self.persist_alert(alert.clone());
+                self.record_incident(alert, "recovery");
+                transitions.push(AlertTransition {
+                    alert: alert.clone(),
+                    event_type: AlertEventType::Resolved,
+                    channel_ids: Vec::new(),
+                });
+            }
+        }
     }
 
     /// Persist alert to database in background
@@ -338,6 +480,35 @@ impl AlertManager {
         tokio::spawn(async move {
             if let Err(e) = db.upsert_alert(&alert).await {
                 error!("Failed to persist alert to database: {}", e);
+            }
+        });
+    }
+
+    fn record_incident(&self, alert: &Alert, event_type: &str) {
+        let db = self.database.clone();
+        let event = IncidentEvent {
+            event_id: Uuid::new_v4().to_string(),
+            alert_id: Some(alert.id.clone()),
+            rule_id: Some(alert.rule_id.clone()),
+            agent_id: alert.agent_id.clone(),
+            event_type: event_type.to_string(),
+            severity: format!("{:?}", alert.severity).to_lowercase(),
+            title: match event_type {
+                "recovery" => format!("Recovered: {}", alert.rule_name),
+                "pending" => format!("Pending: {}", alert.rule_name),
+                _ => format!("Firing: {}", alert.rule_name),
+            },
+            description: alert.message.clone(),
+            metadata: serde_json::json!({
+                "metric": alert.metric,
+                "value": alert.current_value,
+                "threshold": alert.threshold,
+            }),
+            occurred_at: Utc::now(),
+        };
+        tokio::spawn(async move {
+            if let Err(error) = db.insert_incident_event(&event).await {
+                error!(%error, "Failed to persist incident event");
             }
         });
     }
@@ -413,9 +584,29 @@ impl AlertManager {
             // Save to database
             let db = self.database.clone();
             let aid = alert_id.to_string();
+            let acknowledged_by_db = acknowledged_by.clone();
             tokio::spawn(async move {
-                if let Err(e) = db.acknowledge_alert_db(&aid, &acknowledged_by).await {
+                if let Err(e) = db.acknowledge_alert_db(&aid, &acknowledged_by_db).await {
                     error!("Failed to acknowledge alert in database: {}", e);
+                }
+            });
+
+            let event_db = self.database.clone();
+            let event = IncidentEvent {
+                event_id: Uuid::new_v4().to_string(),
+                alert_id: Some(alert.id.clone()),
+                rule_id: Some(alert.rule_id.clone()),
+                agent_id: alert.agent_id.clone(),
+                event_type: "acknowledged".to_string(),
+                severity: format!("{:?}", alert.severity).to_lowercase(),
+                title: format!("Acknowledged: {}", alert.rule_name),
+                description: format!("Alert acknowledged by {}", acknowledged_by),
+                metadata: serde_json::json!({ "acknowledged_by": acknowledged_by }),
+                occurred_at: Utc::now(),
+            };
+            tokio::spawn(async move {
+                if let Err(error) = event_db.insert_incident_event(&event).await {
+                    error!(%error, "Failed to persist acknowledgement event");
                 }
             });
 

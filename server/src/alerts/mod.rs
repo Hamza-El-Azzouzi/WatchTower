@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub mod manager;
+pub mod notifications;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertRule {
@@ -104,6 +105,202 @@ pub struct Alert {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
+pub enum AlertEventType {
+    Firing,
+    Resolved,
+    Test,
+}
+
+impl AlertEventType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Firing => "firing",
+            Self::Resolved => "resolved",
+            Self::Test => "test",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AlertTransition {
+    pub alert: Alert,
+    pub event_type: AlertEventType,
+    pub channel_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationChannelType {
+    GenericWebhook,
+    Slack,
+    Discord,
+    Email,
+}
+
+impl NotificationChannelType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::GenericWebhook => "generic_webhook",
+            Self::Slack => "slack",
+            Self::Discord => "discord",
+            Self::Email => "email",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NotificationChannel {
+    pub id: String,
+    pub name: String,
+    pub channel_type: NotificationChannelType,
+    pub webhook_url: Option<String>,
+    pub email_to: Option<String>,
+    pub smtp_host: Option<String>,
+    pub smtp_port: i32,
+    pub smtp_username: Option<String>,
+    pub smtp_password: Option<String>,
+    pub smtp_from: Option<String>,
+    pub smtp_tls: bool,
+    pub enabled: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NotificationChannelView {
+    pub id: String,
+    pub name: String,
+    pub channel_type: NotificationChannelType,
+    pub destination: String,
+    pub enabled: bool,
+    pub configured: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<&NotificationChannel> for NotificationChannelView {
+    fn from(channel: &NotificationChannel) -> Self {
+        let destination = channel
+            .email_to
+            .clone()
+            .or_else(|| {
+                channel.webhook_url.as_ref().map(|url| {
+                    reqwest::Url::parse(url)
+                        .ok()
+                        .and_then(|parsed| parsed.host_str().map(str::to_string))
+                        .unwrap_or_else(|| "configured webhook".to_string())
+                })
+            })
+            .unwrap_or_else(|| "not configured".to_string());
+        let configured = match channel.channel_type {
+            NotificationChannelType::Email => {
+                channel.email_to.is_some()
+                    && channel.smtp_host.is_some()
+                    && channel.smtp_from.is_some()
+            }
+            _ => channel.webhook_url.is_some(),
+        };
+        Self {
+            id: channel.id.clone(),
+            name: channel.name.clone(),
+            channel_type: channel.channel_type.clone(),
+            destination,
+            enabled: channel.enabled,
+            configured,
+            created_at: channel.created_at,
+            updated_at: channel.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateNotificationChannelRequest {
+    pub name: String,
+    pub channel_type: NotificationChannelType,
+    pub webhook_url: Option<String>,
+    pub email_to: Option<String>,
+    pub smtp_host: Option<String>,
+    #[serde(default = "default_smtp_port")]
+    pub smtp_port: i32,
+    pub smtp_username: Option<String>,
+    pub smtp_password: Option<String>,
+    pub smtp_from: Option<String>,
+    #[serde(default = "default_true")]
+    pub smtp_tls: bool,
+}
+
+fn default_smtp_port() -> i32 {
+    587
+}
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertSilence {
+    pub id: String,
+    pub name: String,
+    pub reason: Option<String>,
+    pub rule_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateAlertSilenceRequest {
+    pub name: String,
+    pub reason: Option<String>,
+    pub rule_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub starts_at: DateTime<Utc>,
+    pub ends_at: DateTime<Utc>,
+    pub created_by: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationDelivery {
+    pub id: i64,
+    pub alert_id: String,
+    pub channel_id: Option<String>,
+    pub channel_name: String,
+    pub event_type: String,
+    pub status: String,
+    pub attempt_count: i32,
+    pub response_status: Option<i32>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub delivered_at: Option<DateTime<Utc>>,
+    pub next_attempt_at: DateTime<Utc>,
+    pub last_attempt_at: Option<DateTime<Utc>>,
+    pub max_attempts: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingNotification {
+    pub delivery: NotificationDelivery,
+    pub payload: serde_json::Value,
+    pub channel: NotificationChannel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncidentEvent {
+    pub event_id: String,
+    pub alert_id: Option<String>,
+    pub rule_id: Option<String>,
+    pub agent_id: String,
+    pub event_type: String,
+    pub severity: String,
+    pub title: String,
+    pub description: String,
+    pub metadata: serde_json::Value,
+    pub occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum AlertState {
     Pending,  // Condition met but waiting for duration
     Firing,   // Alert actively triggered
@@ -112,8 +309,9 @@ pub enum AlertState {
 
 impl Alert {
     pub fn new(rule: &AlertRule, agent_id: String, agent_name: String, current_value: f64) -> Self {
-        // Use composite key as ID so it matches HashMap storage key
-        let id = format!("{}:{}", rule.id, agent_id);
+        // Every firing lifecycle is a distinct incident. The evaluator separately
+        // correlates active alerts by rule and agent.
+        let id = uuid::Uuid::new_v4().to_string();
         let message = format!(
             "{} {} on {} is {} {} (threshold: {} {})",
             rule.severity.emoji(),

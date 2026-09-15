@@ -24,11 +24,14 @@ Administrators must generate replacement keys after upgrading.
 
 ## 2. Actionable Alerting
 
-- [ ] Webhook destinations and test delivery
-- [ ] Persistent delivery history and retry state
-- [ ] Alert silences and scheduled maintenance windows
-- [ ] Recovery notifications
-- [ ] Offline-agent alerts
+- [x] Generic webhook, Slack, Discord, and SMTP email destinations with test delivery
+- [x] Persistent delivery history with bounded exponential retry state
+- [x] Alert silences and scheduled maintenance windows
+- [x] Firing and recovery notifications
+- [x] Offline-agent alerts with automatic recovery
+- [x] Five-second evaluation cadence with rule duration and cooldown controls
+- [x] Correlated incident timeline for alert transitions, acknowledgements, process spikes, and error logs
+- [x] Dashboard threshold charts driven by enabled alert rules
 
 ## 3. Agent Onboarding
 
