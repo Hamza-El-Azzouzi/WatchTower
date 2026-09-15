@@ -15,8 +15,13 @@ WORKDIR /app
 # Copy manifests first for better caching
 COPY Cargo.toml Cargo.lock ./
 
-# Build dependencies only (cached layer)
-RUN cargo build --release || true
+# Build dependencies against a temporary target. The previous empty-project
+# command failed before compiling anything, which made every ARM64 release
+# rebuild the full dependency graph under emulation.
+RUN mkdir -p src \
+    && printf 'fn main() {}\n' > src/main.rs \
+    && cargo build --locked --release \
+    && rm -rf src
 
 # Copy actual source code
 COPY src ./src
@@ -25,7 +30,7 @@ COPY benches ./benches
 COPY config.toml ./config.toml
 
 # Build for release with optimizations
-RUN cargo build --release
+RUN cargo build --locked --release
 
 # Stage 2: Runtime image
 FROM debian:bookworm-slim
@@ -69,8 +74,6 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8080
 ENV DATABASE_ENABLED=true
-ENV AUTH_ENABLED=true
-ENV AUTH_REQUIRE_API_KEY=true
 
 # Volume for persistent data
 VOLUME ["/app/data"]

@@ -9,10 +9,15 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+
+RUN mkdir -p src \
+    && printf 'fn main() {}\n' > src/main.rs \
+    && cargo build --locked --release \
+    && rm -rf src
 
 # Build the agent
-RUN cargo build --release
+COPY src ./src
+RUN cargo build --locked --release
 
 # Runtime stage
 FROM debian:bookworm-slim

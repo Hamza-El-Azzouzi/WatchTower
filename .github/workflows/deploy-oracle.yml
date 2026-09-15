@@ -57,12 +57,11 @@ jobs:
   publish-server:
     name: Publish server image
     needs: configuration
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.configuration.outputs.oracle_platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     outputs:
       image: ${{ steps.image.outputs.value }}
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Resolve image name
         id: image
@@ -88,10 +87,9 @@ jobs:
   build-agent:
     name: Build native agent
     needs: configuration
-    runs-on: ubuntu-latest
+    runs-on: ${{ needs.configuration.outputs.oracle_platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build agent for the Oracle architecture
         uses: docker/build-push-action@v6
