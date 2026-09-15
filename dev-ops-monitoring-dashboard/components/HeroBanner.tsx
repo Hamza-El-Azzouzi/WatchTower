@@ -1,97 +1,51 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Activity, TrendingUp, Zap } from 'lucide-react'
+import { Activity, ArrowUpRight, Cpu, MemoryStick, ShieldCheck } from 'lucide-react'
+import Link from 'next/link'
 import { useMetricsContext } from '@/contexts/MetricsContext'
 
 export default function HeroBanner() {
   const { agents, agentMetrics } = useMetricsContext()
-  
-  // Calculate aggregate metrics across all agents
-  const getAggregateMetricValue = (metricName: string): number => {
-    if (agents.length === 0) return 0
-    
-    let total = 0
-    let count = 0
-    
-    agents.forEach(agent => {
-      const agentData = agentMetrics[agent.id]
-      if (agentData) {
-        const metric = agentData.metrics.find(m => m.name === metricName)
-        if (metric) {
-          total += metric.value
-          count++
-        }
-      }
-    })
-    
-    return count > 0 ? total / count : 0
+  const average = (name: string) => {
+    const values = agents.flatMap(agent => agentMetrics[agent.id]?.metrics.find(metric => metric.name === name)?.value ?? [])
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0
   }
-  
-  const cpuValue = getAggregateMetricValue('cpu_usage')
-  const memoryValue = getAggregateMetricValue('memory_usage')
-  const healthyAgents = agents.filter(a => a.status === 'Healthy').length
-  const uptimePercent = agents.length > 0 ? (healthyAgents / agents.length) * 100 : 0
-  
-  const cpuStatus = cpuValue < 70 ? 'Normal' : cpuValue < 90 ? 'Warning' : 'Critical'
-  const memoryStatus = memoryValue < 75 ? 'Stable' : memoryValue < 90 ? 'Warning' : 'Critical'
-  
-  const metrics = {
-    cpu: cpuValue,
-    memory: memoryValue,
-    uptime: uptimePercent,
-    cpuStatus,
-    memoryStatus,
-  }
+  const cpu = average('cpu_usage')
+  const memory = average('memory_usage')
+  const healthy = agents.filter(agent => agent.status === 'Healthy').length
+  const health = agents.length ? Math.round((healthy / agents.length) * 100) : 100
+
   return (
-    <div className="relative overflow-hidden bg-gradient-to-br from-primary/10 via-background to-accent/5 rounded-2xl border border-border/50 p-8 mb-8 animate-slide-up">
-      {/* Animated background elements */}
-      <div className="absolute inset-0 overflow-hidden">
-        <div className="absolute -top-40 -right-40 w-80 h-80 bg-primary/20 rounded-full blur-3xl opacity-20 animate-float" />
-        <div className="absolute -bottom-20 -left-40 w-80 h-80 bg-accent/20 rounded-full blur-3xl opacity-20 animate-float" style={{ animationDelay: '1s' }} />
-      </div>
-
-      {/* Content */}
-      <div className="relative z-10">
-        <div className="flex items-start justify-between mb-6">
-          <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-primary/20 border border-primary/30 mb-4">
-              <Zap className="w-4 h-4 text-primary" />
-              <span className="text-sm font-medium text-primary">Real-time Monitoring</span>
-            </div>
-            <h2 className="text-3xl font-bold text-foreground mb-2">Infrastructure at Your Fingertips</h2>
-            <p className="text-muted-foreground text-lg max-w-2xl">
-              Monitor all your servers in real-time with beautiful charts, instant alerts, and comprehensive metrics. Stay ahead of issues before they impact your systems.
-            </p>
+    <section className="surface-panel relative mb-6 overflow-hidden rounded-[24px] p-6 sm:p-8 lg:p-10">
+      <div className="pointer-events-none absolute inset-0 opacity-50" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px)', backgroundSize: '38px 38px' }} />
+      <div className="pointer-events-none absolute -right-24 -top-32 h-80 w-80 rounded-full bg-cyan-400/10 blur-3xl" />
+      <div className="relative grid gap-8 lg:grid-cols-[1.25fr_.75fr] lg:items-end">
+        <div>
+          <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-lime-400/20 bg-lime-400/8 px-3 py-1.5 text-xs font-medium text-lime-300">
+            <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-lime-400 opacity-40" /><span className="relative h-2 w-2 rounded-full bg-lime-400" /></span>
+            Fleet telemetry is live
           </div>
-          <div className="hidden lg:flex items-center gap-4">
-            <div className="w-12 h-12 rounded-lg bg-primary/20 flex items-center justify-center animate-glow">
-              <Activity className="w-6 h-6 text-primary" />
-            </div>
-            <div className="w-12 h-12 rounded-lg bg-accent/20 flex items-center justify-center animate-glow" style={{ animationDelay: '1s' }}>
-              <TrendingUp className="w-6 h-6 text-accent" />
-            </div>
+          <p className="eyebrow mb-3 text-cyan-300/70">Command center</p>
+          <h2 className="max-w-2xl text-3xl font-semibold leading-[1.08] tracking-[-0.045em] text-white sm:text-4xl lg:text-5xl">
+            See pressure before it becomes an incident.
+          </h2>
+          <p className="mt-4 max-w-xl text-sm leading-6 text-slate-400 sm:text-base">A focused view of fleet health, resource saturation, and systems that need your attention now.</p>
+          <div className="mt-7 flex flex-wrap gap-3">
+            <Link href="#servers" className="inline-flex items-center gap-2 rounded-xl bg-cyan-300 px-4 py-2.5 text-sm font-semibold text-[#061016] transition hover:bg-cyan-200">Inspect fleet <ArrowUpRight className="h-4 w-4" /></Link>
+            <Link href="/alerts" className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[.035] px-4 py-2.5 text-sm font-medium text-slate-200 transition hover:bg-white/[.07]">Review incidents</Link>
           </div>
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 rounded-lg bg-background/40 border border-border/50 hover:border-primary/30 transition-smooth">
-            <div className="text-sm font-medium text-muted-foreground mb-1">CPU Usage</div>
-            <div className="text-2xl font-bold text-primary">{metrics.cpu.toFixed(1)}%</div>
-            <div className="text-xs text-muted-foreground mt-1">{metrics.cpuStatus}</div>
-          </div>
-          <div className="p-4 rounded-lg bg-background/40 border border-border/50 hover:border-accent/30 transition-smooth">
-            <div className="text-sm font-medium text-muted-foreground mb-1">Memory</div>
-            <div className="text-2xl font-bold text-accent">{metrics.memory.toFixed(1)}%</div>
-            <div className="text-xs text-muted-foreground mt-1">{metrics.memoryStatus}</div>
-          </div>
-          <div className="p-4 rounded-lg bg-background/40 border border-border/50 hover:border-emerald-400/30 transition-smooth">
-            <div className="text-sm font-medium text-muted-foreground mb-1">Uptime</div>
-            <div className="text-2xl font-bold text-emerald-400">{metrics.uptime.toFixed(1)}%</div>
-            <div className="text-xs text-muted-foreground mt-1">{metrics.uptime >= 99 ? 'Excellent' : metrics.uptime >= 95 ? 'Good' : 'Degraded'}</div>
-          </div>
+        <div className="grid grid-cols-3 gap-2 sm:gap-3">
+          <Signal icon={Cpu} label="Avg CPU" value={`${cpu.toFixed(0)}%`} tone="cyan" />
+          <Signal icon={MemoryStick} label="Memory" value={`${memory.toFixed(0)}%`} tone="violet" />
+          <Signal icon={ShieldCheck} label="Health" value={`${health}%`} tone="lime" />
         </div>
       </div>
-    </div>
+    </section>
   )
+}
+
+function Signal({ icon: Icon, label, value, tone }: { icon: typeof Activity; label: string; value: string; tone: 'cyan' | 'violet' | 'lime' }) {
+  const tones = { cyan: 'text-cyan-300 bg-cyan-400/10', violet: 'text-violet-300 bg-violet-400/10', lime: 'text-lime-300 bg-lime-400/10' }
+  return <div className="rounded-2xl border border-white/8 bg-[#080d15]/55 p-3.5 sm:p-4"><div className={`mb-5 flex h-8 w-8 items-center justify-center rounded-lg ${tones[tone]}`}><Icon className="h-4 w-4" /></div><p className="text-[10px] font-medium uppercase tracking-[.13em] text-slate-500">{label}</p><p className="mt-1 text-xl font-semibold tabular-nums text-white sm:text-2xl">{value}</p></div>
 }

@@ -49,21 +49,22 @@ export default function AdminLoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#070b12] p-4 sm:p-8">
+      <div className="pointer-events-none absolute inset-0 opacity-60" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px)', backgroundSize: '42px 42px' }} />
+      <div className="pointer-events-none absolute -right-32 top-[-12rem] h-[34rem] w-[34rem] rounded-full bg-lime-400/8 blur-3xl" />
+      <div className="relative z-10 w-full max-w-md">
         {/* Logo and Title */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-accent mb-4 animate-glow">
-            <Shield className="w-8 h-8 text-white" />
+          <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-lime-300 text-[#0b1306] shadow-[0_0_45px_rgba(132,204,22,.15)]">
+            <Shield className="h-6 w-6" />
           </div>
-          <h1 className="text-3xl font-bold text-foreground mb-2">Admin Login</h1>
-          <p className="text-muted-foreground">
-            Sign in to access the admin dashboard
-          </p>
+          <p className="eyebrow mb-2">Privileged access</p>
+          <h1 className="text-3xl font-semibold tracking-[-.04em] text-white">Administration</h1>
+          <p className="mt-2 text-sm text-slate-400">Manage agents, access, and platform policy.</p>
         </div>
 
         {/* Login Form */}
-        <div className="bg-card/50 backdrop-blur-sm border border-card-border rounded-2xl p-8 shadow-xl">
+        <div className="surface-panel rounded-[24px] p-6 sm:p-8">
           {error && (
             <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-lg flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
@@ -81,7 +82,7 @@ export default function AdminLoginPage() {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-4 py-3 bg-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-foreground placeholder:text-muted-foreground"
+                className="w-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-foreground placeholder:text-slate-600 focus:border-lime-300/40 focus:ring-2 focus:ring-lime-300/15"
                 placeholder="Enter your username"
                 required
                 autoComplete="username"
@@ -97,7 +98,7 @@ export default function AdminLoginPage() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-background border border-input rounded-lg focus:outline-none focus:ring-2 focus:ring-primary text-foreground placeholder:text-muted-foreground"
+                className="w-full rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-foreground placeholder:text-slate-600 focus:border-lime-300/40 focus:ring-2 focus:ring-lime-300/15"
                 placeholder="Enter your password"
                 required
                 autoComplete="current-password"
@@ -107,7 +108,7 @@ export default function AdminLoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full px-4 py-3 bg-gradient-to-r from-primary to-accent text-white rounded-lg hover:opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-semibold shadow-lg hover:shadow-xl"
+              className="w-full rounded-xl bg-lime-300 px-4 py-3 font-semibold text-[#0b1306] transition hover:bg-lime-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">

@@ -5,6 +5,7 @@ import { getAgents } from '@/lib/api';
 import { Agent } from '@/types';
 import { useLogsWebSocket } from '@/hooks/useWebSocket';
 import { WsLogMessage } from '@/lib/websocket';
+import { getAuthHeaders } from '@/lib/auth-utils';
 
 // Log level enum
 type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'FATAL';
@@ -73,7 +74,7 @@ export default function LogsPage() {
   const { isConnected: wsConnected } = useLogsWebSocket(handleLogMessage);
 
   // Initial load from HTTP API (get historical logs)
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       const params = new URLSearchParams();
       if (selectedAgent) params.append('agent_id', selectedAgent);
@@ -82,7 +83,8 @@ export default function LogsPage() {
       params.append('limit', limit.toString());
 
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'}/api/v1/logs?${params}`
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'}/api/v1/logs?${params}`,
+        { headers: getAuthHeaders() },
       );
       
       if (!response.ok) {
@@ -99,7 +101,7 @@ export default function LogsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [keyword, limit, selectedAgent, selectedLevel]);
 
   // Fetch agents for filter dropdown
   useEffect(() => {
@@ -117,7 +119,7 @@ export default function LogsPage() {
   // Fetch logs on mount and when filters change
   useEffect(() => {
     fetchLogs();
-  }, [selectedAgent, selectedLevel, keyword, limit]);
+  }, [fetchLogs]);
 
   // Remove auto-refresh polling - WebSocket handles real-time updates
   // Auto-refresh is now just for clearing the view

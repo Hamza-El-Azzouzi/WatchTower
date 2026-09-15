@@ -23,24 +23,21 @@ export default function MetricCard({
   size = 'md',
 }: MetricCardProps) {
   const borderColorMap = {
-    green: 'border-green-500',
-    yellow: 'border-yellow-500',
-    red: 'border-red-500',
-    blue: 'border-blue-500',
+    green: 'hover:border-emerald-400/25',
+    yellow: 'hover:border-amber-400/25',
+    red: 'hover:border-rose-400/25',
+    blue: 'hover:border-cyan-400/25',
   };
 
   const bgColorMap = {
-    green: 'bg-green-900/10',
-    yellow: 'bg-yellow-900/10',
-    red: 'bg-red-900/10',
-    blue: 'bg-blue-900/10',
+    green: '', yellow: '', red: '', blue: '',
   };
 
   const textColorMap = {
-    green: 'text-green-400',
-    yellow: 'text-yellow-400',
-    red: 'text-red-400',
-    blue: 'text-blue-400',
+    green: 'text-lime-300',
+    yellow: 'text-amber-300',
+    red: 'text-rose-300',
+    blue: 'text-cyan-300',
   };
 
   const sizeMap = {
@@ -68,16 +65,16 @@ export default function MetricCard({
   const sizeConfig = sizeMap[size];
 
   return (
-    <div className={`glass-morphism rounded-xl border transition-smooth hover:shadow-lg group ${borderColorMap[finalColor]} ${bgColorMap[finalColor]} ${sizeConfig.card}`}>
+    <div className={`surface-panel rounded-[20px] transition-smooth group ${borderColorMap[finalColor]} ${bgColorMap[finalColor]} ${sizeConfig.card}`}>
       <div className="flex items-start justify-between mb-4">
         <div className="flex-1">
           <p className={`text-muted-foreground ${sizeConfig.label} font-medium`}>{label}</p>
         </div>
-        {icon && <div className={`${textColorMap[finalColor]} ${sizeConfig.icon} group-hover:scale-110 transition-smooth`}>{icon}</div>}
+        {icon && <div className={`${textColorMap[finalColor]} flex h-10 w-10 items-center justify-center rounded-xl bg-white/[.035] ring-1 ring-white/6 transition-smooth`}>{icon}</div>}
       </div>
 
       <div className="flex items-baseline gap-2 mb-3">
-        <span className={`font-bold ${sizeConfig.value} ${textColorMap[finalColor]} group-hover:text-primary transition-colors`}>
+        <span className={`font-semibold tracking-[-.04em] text-white ${sizeConfig.value}`}>
           {typeof value === 'number' ? value.toFixed(1) : value}
         </span>
         {unit && <span className={`text-muted-foreground ${sizeConfig.label}`}>{unit}</span>}
@@ -88,7 +85,7 @@ export default function MetricCard({
       )}
 
       {typeof percentage === 'number' && (
-        <div className="mt-4 w-full bg-background/30 rounded-full h-2 overflow-hidden">
+        <div className="metric-track mt-4">
           <div
             className={`h-full rounded-full transition-all ${
               finalColor === 'green'

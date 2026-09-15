@@ -9,6 +9,7 @@ import MetricsSection from '@/components/MetricsSection';
 import ChartsSection from '@/components/ChartsSection';
 import AlertThresholdChart from '@/components/AlertThresholdChart';
 import ConnectionStatus from '@/components/ConnectionStatus';
+import ProcessWatch from '@/components/ProcessWatch';
 import { formatRelativeTime } from '@/lib/metrics-utils';
 import { Agent, LatestMetrics, Metric } from '@/types';
 import { useMetricsWebSocket } from '@/hooks/useWebSocket';
@@ -118,10 +119,10 @@ export default function ServerDetailPage() {
   }, [initialStateReceived, agent]);
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen">
       {/* Header */}
-      <div className="border-b border-border glass-morphism sticky top-0 z-10 ml-64">
-        <div className="max-w-full px-8 py-6">
+      <div className="sticky top-16 z-10 border-b border-white/8 bg-[#070b12]/80 backdrop-blur-2xl lg:top-0">
+        <div className="px-4 py-5 sm:px-6 lg:px-10">
           <Link
             href="/"
             className="inline-flex items-center gap-2 text-accent hover:text-primary transition-smooth mb-4"
@@ -145,7 +146,7 @@ export default function ServerDetailPage() {
       </div>
 
       {/* Content */}
-      <main className="max-w-full px-8 py-8">
+      <main className="page-shell">
         {error && (
           <div className="mb-8 glass-morphism rounded-xl border border-red-500/30 bg-red-500/10 p-4 flex items-start gap-3 animate-slide-up">
             <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
@@ -165,6 +166,9 @@ export default function ServerDetailPage() {
           <>
             <h2 className="text-2xl font-bold text-foreground mb-6">Current Metrics</h2>
             <MetricsSection metrics={metrics} loading={loading} />
+
+            <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Process Watch</h2>
+            <ProcessWatch metrics={metrics} />
 
             <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Alert Thresholds</h2>
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-12">

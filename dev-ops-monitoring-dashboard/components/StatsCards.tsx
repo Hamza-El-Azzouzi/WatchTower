@@ -1,75 +1,34 @@
 'use client';
 
-import { Server, CheckCircle2, AlertCircle, XCircle, Clock } from 'lucide-react';
+import { Server, CheckCircle2, AlertTriangle, WifiOff } from 'lucide-react';
 import { Agent } from '@/types';
 
-interface StatsCardsProps {
-  agents: Agent[];
-  lastUpdated: Date;
-}
-
-export default function StatsCards({ agents, lastUpdated }: StatsCardsProps) {
-  const totalServers = agents.length;
-  const healthyServers = agents.filter(a => a.status === 'Healthy').length;
-  const degradedServers = agents.filter(a => a.status === 'Degraded').length;
-  const unreachableServers = agents.filter(a => a.status === 'Unreachable').length;
-
-  const secondsAgo = Math.floor((Date.now() - lastUpdated.getTime()) / 1000);
-  const lastUpdatedText = secondsAgo < 60 ? `${secondsAgo}s ago` : `${Math.floor(secondsAgo / 60)}m ago`;
+export default function StatsCards({ agents, lastUpdated }: { agents: Agent[]; lastUpdated: Date }) {
+  const items = [
+    { label: 'Total nodes', value: agents.length, icon: Server, tone: 'cyan', note: 'Registered fleet' },
+    { label: 'Operational', value: agents.filter(agent => agent.status === 'Healthy').length, icon: CheckCircle2, tone: 'lime', note: 'Reporting normally' },
+    { label: 'Degraded', value: agents.filter(agent => agent.status === 'Degraded').length, icon: AlertTriangle, tone: 'amber', note: 'Needs observation' },
+    { label: 'Unreachable', value: agents.filter(agent => agent.status === 'Unreachable').length, icon: WifiOff, tone: 'rose', note: 'Action required' },
+  ] as const;
+  const secondsAgo = Math.max(0, Math.floor((Date.now() - lastUpdated.getTime()) / 1000));
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-      <div className="glass-morphism rounded-xl p-6 hover:shadow-lg transition-smooth group animate-slide-up">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-muted-foreground mb-2">Total Servers</p>
-            <p className="text-4xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">{totalServers}</p>
-          </div>
-          <div className="w-12 h-12 rounded-lg bg-primary/20 flex items-center justify-center group-hover:scale-110 transition-smooth">
-            <Server className="w-6 h-6 text-primary" />
-          </div>
-        </div>
-        <div className="mt-4 h-1 w-full bg-gradient-to-r from-primary/30 to-transparent rounded-full" />
+    <section className="mb-8">
+      <div className="mb-4 flex items-end justify-between gap-4"><div><p className="eyebrow">Fleet status</p><h2 className="mt-1 text-xl font-semibold tracking-tight text-white">Operational snapshot</h2></div><p className="hidden text-xs text-slate-500 sm:block">Updated {secondsAgo < 60 ? `${secondsAgo}s` : `${Math.floor(secondsAgo / 60)}m`} ago</p></div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {items.map((item, index) => <Stat key={item.label} {...item} delay={index * 45} />)}
       </div>
-
-      <div className="glass-morphism rounded-xl p-6 hover:shadow-lg transition-smooth group animate-slide-up" style={{ animationDelay: '50ms' }}>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-emerald-300 mb-2">Healthy Servers</p>
-            <p className="text-4xl font-bold text-emerald-400">{healthyServers}</p>
-          </div>
-          <div className="w-12 h-12 rounded-lg bg-emerald-500/20 flex items-center justify-center group-hover:scale-110 transition-smooth">
-            <CheckCircle2 className="w-6 h-6 text-emerald-400" />
-          </div>
-        </div>
-        <div className="mt-4 h-1 w-full bg-gradient-to-r from-emerald-500/30 to-transparent rounded-full" />
-      </div>
-
-      <div className="glass-morphism rounded-xl p-6 hover:shadow-lg transition-smooth group animate-slide-up" style={{ animationDelay: '100ms' }}>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-amber-300 mb-2">Degraded Servers</p>
-            <p className="text-4xl font-bold text-amber-400">{degradedServers}</p>
-          </div>
-          <div className="w-12 h-12 rounded-lg bg-amber-500/20 flex items-center justify-center group-hover:scale-110 transition-smooth">
-            <AlertCircle className="w-6 h-6 text-amber-400" />
-          </div>
-        </div>
-        <div className="mt-4 h-1 w-full bg-gradient-to-r from-amber-500/30 to-transparent rounded-full" />
-      </div>
-
-      <div className="glass-morphism rounded-xl p-6 hover:shadow-lg transition-smooth group animate-slide-up" style={{ animationDelay: '150ms' }}>
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm text-red-300 mb-2">Unreachable Servers</p>
-            <p className="text-4xl font-bold text-red-400">{unreachableServers}</p>
-          </div>
-          <div className="w-12 h-12 rounded-lg bg-red-500/20 flex items-center justify-center group-hover:scale-110 transition-smooth">
-            <XCircle className="w-6 h-6 text-red-400" />
-          </div>
-        </div>
-        <div className="mt-4 h-1 w-full bg-gradient-to-r from-red-500/30 to-transparent rounded-full" />
-      </div>
-    </div>
+    </section>
   );
+}
+
+const toneMap = {
+  cyan: 'bg-cyan-400/10 text-cyan-300 ring-cyan-400/15',
+  lime: 'bg-lime-400/10 text-lime-300 ring-lime-400/15',
+  amber: 'bg-amber-400/10 text-amber-300 ring-amber-400/15',
+  rose: 'bg-rose-400/10 text-rose-300 ring-rose-400/15',
+};
+
+function Stat({ label, value, icon: Icon, tone, note, delay }: { label: string; value: number; icon: typeof Server; tone: keyof typeof toneMap; note: string; delay: number }) {
+  return <div className="surface-panel animate-slide-up rounded-2xl p-4 sm:p-5" style={{ animationDelay: `${delay}ms` }}><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-medium text-slate-400">{label}</p><p className="mt-2 text-3xl font-semibold tracking-[-.04em] tabular-nums text-white sm:text-4xl">{value}</p></div><div className={`flex h-9 w-9 items-center justify-center rounded-xl ring-1 ${toneMap[tone]}`}><Icon className="h-[18px] w-[18px]" /></div></div><p className="mt-3 hidden text-[11px] text-slate-600 sm:block">{note}</p></div>
 }

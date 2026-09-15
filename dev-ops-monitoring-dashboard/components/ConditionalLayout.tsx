@@ -14,11 +14,11 @@ export function ConditionalLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <>
+    <div className="min-h-screen">
       <Sidebar />
-      <div className="ml-64">
+      <div className="min-h-screen pt-16 lg:pl-72 lg:pt-0">
         {children}
       </div>
-    </>
+    </div>
   )
 }

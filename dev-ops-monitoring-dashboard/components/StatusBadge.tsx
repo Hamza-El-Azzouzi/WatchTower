@@ -10,10 +10,10 @@ export default function StatusBadge({ status, size = 'md' }: StatusBadgeProps) {
   const color = getStatusColor(status);
   
   const bgColorMap = {
-    green: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
-    yellow: 'bg-amber-500/20 text-amber-300 border border-amber-500/30',
-    red: 'bg-red-500/20 text-red-300 border border-red-500/30',
-    gray: 'bg-slate-600/20 text-slate-300 border border-slate-500/30',
+    green: 'bg-lime-400/8 text-lime-300 ring-1 ring-inset ring-lime-400/18',
+    yellow: 'bg-amber-400/8 text-amber-300 ring-1 ring-inset ring-amber-400/18',
+    red: 'bg-rose-400/8 text-rose-300 ring-1 ring-inset ring-rose-400/18',
+    gray: 'bg-slate-400/8 text-slate-300 ring-1 ring-inset ring-slate-400/18',
   };
 
   const sizeMap = {
@@ -23,14 +23,14 @@ export default function StatusBadge({ status, size = 'md' }: StatusBadgeProps) {
   };
 
   const dotMap = {
-    green: 'bg-emerald-400 animate-pulse-soft',
+    green: 'bg-lime-400',
     yellow: 'bg-amber-400 animate-pulse-soft',
-    red: 'bg-red-400 animate-pulse-soft',
+    red: 'bg-rose-400 animate-pulse-soft',
     gray: 'bg-slate-400',
   };
 
   return (
-    <span className={`inline-flex items-center rounded-full font-medium transition-smooth ${bgColorMap[color]} ${sizeMap[size]}`}>
+    <span className={`inline-flex items-center rounded-full font-medium ${bgColorMap[color]} ${sizeMap[size]}`}>
       <span className={`w-2 h-2 rounded-full mr-2 ${dotMap[color]}`} />
       {status}
     </span>

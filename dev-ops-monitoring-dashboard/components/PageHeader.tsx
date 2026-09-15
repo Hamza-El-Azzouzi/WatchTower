@@ -1,51 +1,49 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { usePathname } from 'next/navigation';
+import { Clock3 } from 'lucide-react';
+import ConnectionStatus from '@/components/ConnectionStatus';
+import { useMetricsContext } from '@/contexts/MetricsContext';
+
+const pageDetails: Record<string, { title: string; description: string }> = {
+  '/': { title: 'Fleet overview', description: 'Live health and capacity across your infrastructure' },
+  '/performance': { title: 'Performance', description: 'Compare resource pressure and system efficiency' },
+  '/databases': { title: 'Databases', description: 'Connection health and workload telemetry' },
+  '/logs': { title: 'Logs', description: 'Search and inspect events across every agent' },
+  '/alerts': { title: 'Alerts', description: 'Prioritize and resolve active incidents' },
+};
 
 export default function PageHeader() {
+  const pathname = usePathname();
+  const { connectionState } = useMetricsContext();
   const [currentTime, setCurrentTime] = useState('');
-  const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setCurrentTime(
-        now.toLocaleTimeString('en-US', {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        })
-      );
-    };
-
+    const updateTime = () => setCurrentTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     updateTime();
-    const interval = setInterval(updateTime, 1000);
+    const interval = setInterval(updateTime, 30_000);
     return () => clearInterval(interval);
   }, []);
 
+  const details = pageDetails[pathname] ?? pageDetails['/'];
+
   return (
-    <div className="border-b border-border sticky top-0 z-10 glass-morphism">
-      <div className="ml-64 max-w-full px-8 py-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-foreground">DevOps Monitoring</h1>
-            <p className="text-sm text-muted-foreground mt-1">Real-time infrastructure monitoring dashboard</p>
+    <header className="sticky top-16 z-40 border-b border-white/8 bg-[#070b12]/78 backdrop-blur-2xl lg:top-0">
+      <div className="mx-auto flex min-h-[82px] max-w-[1600px] items-center justify-between gap-4 px-4 sm:px-6 lg:px-10">
+        <div className="min-w-0">
+          <p className="eyebrow mb-1">WatchTower / Operations</p>
+          <h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-white sm:text-2xl">{details.title}</h1>
+          <p className="mt-0.5 hidden text-sm text-muted-foreground sm:block">{details.description}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <div className="hidden items-center gap-2 rounded-xl border border-white/8 bg-white/[.025] px-3 py-2 text-xs text-slate-400 sm:flex">
+            <Clock3 className="h-3.5 w-3.5" />
+            <time>{currentTime}</time>
           </div>
-          <div className="text-right flex items-center gap-6">
-            <div className="text-center">
-              <div className="text-sm text-muted-foreground flex items-center gap-2 justify-end">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse-soft" />
-                Live data
-              </div>
-              <p className="text-xl font-mono text-accent mt-2">{currentTime}</p>
-            </div>
-            <div className="px-3 py-2 rounded-lg bg-accent/10 border border-accent/30">
-              <RefreshCw className="w-4 h-4 animate-spin text-accent" />
-            </div>
-          </div>
+          <ConnectionStatus state={connectionState} />
         </div>
       </div>
-    </div>
+    </header>
   );
 }

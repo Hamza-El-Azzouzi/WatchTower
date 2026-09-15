@@ -28,17 +28,14 @@ export function useMetricsWebSocket(callbacks: MetricsWebSocketCallbacks | ((mes
   const [initialStateReceived, setInitialStateReceived] = useState(false);
   const wsManagerRef = useRef<WebSocketManager | null>(null);
   
-  // Normalize callbacks
-  const normalizedCallbacks = typeof callbacks === 'function' 
-    ? { onMetric: callbacks } 
-    : callbacks;
-  
-  const callbacksRef = useRef(normalizedCallbacks);
+  const callbacksRef = useRef<MetricsWebSocketCallbacks>({});
   
   // Keep callback ref updated
   useEffect(() => {
-    callbacksRef.current = normalizedCallbacks;
-  }, [normalizedCallbacks]);
+    callbacksRef.current = typeof callbacks === 'function'
+      ? { onMetric: callbacks }
+      : callbacks;
+  }, [callbacks]);
 
   useEffect(() => {
     console.log("[useMetricsWebSocket] Initializing WebSocket connection...");

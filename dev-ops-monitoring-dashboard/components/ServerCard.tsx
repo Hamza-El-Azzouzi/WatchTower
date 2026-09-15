@@ -1,153 +1,50 @@
 'use client';
 
 import Link from 'next/link';
-import { HardDrive, Zap, Database } from 'lucide-react';
+import { ArrowUpRight, Cpu, HardDrive, MemoryStick, Server } from 'lucide-react';
 import StatusBadge from './StatusBadge';
-import { formatRelativeTime, formatBytes, calculatePercentage, extractMetric } from '@/lib/metrics-utils';
+import { formatRelativeTime, extractMetric } from '@/lib/metrics-utils';
 import { Agent } from '@/types';
 import { useMetricsContext } from '@/contexts/MetricsContext';
 
-interface ServerCardProps {
-  agent: Agent;
-}
-
-export default function ServerCard({ agent }: ServerCardProps) {
-  // Get metrics from shared context
+export default function ServerCard({ agent }: { agent: Agent }) {
   const { agentMetrics, initialStateReceived } = useMetricsContext();
-  const metrics = agentMetrics[agent.id] || null;
+  const metrics = agentMetrics[agent.id]?.metrics ?? [];
   const loading = !initialStateReceived;
-
-  const borderColorMap = {
-    Healthy: 'border-green-700/50 hover:border-green-600',
-    Degraded: 'border-yellow-700/50 hover:border-yellow-600',
-    Unreachable: 'border-red-700/50 hover:border-red-600',
-  };
-
-  const bgColorMap = {
-    Healthy: 'bg-green-900/5 hover:bg-green-900/10',
-    Degraded: 'bg-yellow-900/5 hover:bg-yellow-900/10',
-    Unreachable: 'bg-red-900/5 hover:bg-red-900/10',
-  };
-
-  let cpuPercent = 0;
-  let memoryPercent = 0;
-  let diskPercent = 0;
-  let memoryDisplay = '-';
-  let diskDisplay = '-';
-
-  if (metrics) {
-    cpuPercent = extractMetric(metrics.metrics, 'cpu_usage');
-    memoryPercent = extractMetric(metrics.metrics, 'memory_usage');
-
-    // Memory display - get from metrics
-    const memoryUsed = extractMetric(metrics.metrics, 'memory_used_bytes');
-    const memoryTotal = extractMetric(metrics.metrics, 'memory_total_bytes');
-    if (memoryTotal > 0) {
-      memoryDisplay = `${formatBytes(memoryUsed)} / ${formatBytes(memoryTotal)}`;
-    }
-
-    // Disk display - get from metrics
-    const diskUsed = extractMetric(metrics.metrics, 'disk_used_bytes');
-    const diskTotal = extractMetric(metrics.metrics, 'disk_total_bytes');
-    if (diskTotal > 0) {
-      diskPercent = calculatePercentage(diskUsed, diskTotal);
-      diskDisplay = `${formatBytes(diskUsed)} / ${formatBytes(diskTotal)}`;
-    } else {
-      // Fallback to disk_usage percentage if bytes not available
-      diskPercent = extractMetric(metrics.metrics, 'disk_usage');
-    }
-  }
+  const values = [
+    { label: 'CPU', value: extractMetric(metrics, 'cpu_usage'), icon: Cpu },
+    { label: 'Memory', value: extractMetric(metrics, 'memory_usage'), icon: MemoryStick },
+    { label: 'Disk', value: extractMetric(metrics, 'disk_usage'), icon: HardDrive },
+  ];
+  const worst = Math.max(...values.map(item => item.value));
+  const pressure = worst >= 90 ? 'Critical pressure' : worst >= 75 ? 'Elevated load' : 'Within thresholds';
 
   return (
-    <Link href={`/server/${encodeURIComponent(agent.id)}`}>
-      <div
-        className={`block glass-morphism rounded-xl p-6 transition-smooth cursor-pointer group hover:shadow-xl ${borderColorMap[agent.status]} ${bgColorMap[agent.status]}`}
-      >
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex-1">
-            <h3 className="text-lg font-bold text-foreground group-hover:text-primary transition-colors">{agent.name}</h3>
-            <p className="text-xs text-muted-foreground mt-1">Last seen: {formatRelativeTime(agent.last_seen)}</p>
+    <Link href={`/server/${encodeURIComponent(agent.id)}`} className="group block rounded-[20px] focus-visible:outline-none">
+      <article className="surface-panel relative h-full overflow-hidden rounded-[20px] p-5 transition duration-200 group-hover:-translate-y-0.5 group-hover:border-cyan-300/25 group-hover:shadow-[0_24px_70px_rgba(0,0,0,.28)]">
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/30 to-transparent opacity-0 transition group-hover:opacity-100" />
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/[.045] text-slate-300 ring-1 ring-white/8"><Server className="h-[18px] w-[18px]" /></div>
+            <div className="min-w-0"><h3 className="truncate text-[15px] font-semibold text-slate-100 transition group-hover:text-cyan-200">{agent.name}</h3><p className="mt-0.5 truncate font-mono text-[10px] text-slate-600">{agent.id}</p></div>
           </div>
           <StatusBadge status={agent.status} size="sm" />
         </div>
 
-        <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-3">
-            <div>
-              <div className="flex items-center gap-1 mb-2">
-                <Zap className="w-4 h-4 text-blue-400" />
-                <span className="text-xs text-muted-foreground">CPU</span>
-              </div>
-              <p className="text-lg font-semibold text-white">
-                {loading ? '-' : cpuPercent.toFixed(1)}%
-              </p>
-              {!loading && (
-                <div className="mt-2 h-2 bg-background/30 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      cpuPercent < 70 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : cpuPercent < 85 ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-400 to-red-500'
-                    }`}
-                    style={{ width: `${Math.min(cpuPercent, 100)}%` }}
-                  />
-                </div>
-              )}
-            </div>
-
-            <div>
-              <div className="flex items-center gap-1 mb-2">
-                <Database className="w-4 h-4 text-purple-400" />
-                <span className="text-xs text-muted-foreground">Memory</span>
-              </div>
-              <p className="text-lg font-semibold text-white">
-                {loading ? '-' : memoryPercent.toFixed(1)}%
-              </p>
-              {!loading && (
-                <div className="mt-2 h-2 bg-background/30 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      memoryPercent < 80 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : memoryPercent < 90 ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-400 to-red-500'
-                    }`}
-                    style={{ width: `${Math.min(memoryPercent, 100)}%` }}
-                  />
-                </div>
-              )}
-            </div>
-
-            <div>
-              <div className="flex items-center gap-1 mb-2">
-                <HardDrive className="w-4 h-4 text-orange-400" />
-                <span className="text-xs text-muted-foreground">Disk</span>
-              </div>
-              <p className="text-lg font-semibold text-white">
-                {loading ? '-' : diskPercent.toFixed(1)}%
-              </p>
-              {!loading && (
-                <div className="mt-2 h-2 bg-background/30 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${
-                      diskPercent < 70 ? 'bg-gradient-to-r from-emerald-400 to-emerald-500' : diskPercent < 90 ? 'bg-gradient-to-r from-amber-400 to-amber-500' : 'bg-gradient-to-r from-red-400 to-red-500'
-                    }`}
-                    style={{ width: `${Math.min(diskPercent, 100)}%` }}
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-
-          {!loading && (
-            <div className="pt-3 border-t border-border text-xs text-muted-foreground space-y-1">
-              <p>Memory: {memoryDisplay}</p>
-              <p>Disk: {diskDisplay}</p>
-            </div>
-          )}
-
-          <div className="pt-3">
-            <span className="text-xs font-medium text-accent group-hover:text-primary transition-colors">
-              View Details →
-            </span>
-          </div>
+        <div className="my-5 grid grid-cols-3 gap-3">
+          {values.map(item => <Resource key={item.label} {...item} loading={loading} />)}
         </div>
-      </div>
+
+        <div className="flex items-center justify-between border-t border-white/6 pt-4">
+          <div><p className={`text-xs font-medium ${worst >= 90 ? 'text-rose-300' : worst >= 75 ? 'text-amber-300' : 'text-lime-300'}`}>{pressure}</p><p className="mt-0.5 text-[10px] text-slate-600">Seen {formatRelativeTime(agent.last_seen)}</p></div>
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-white/[.035] text-slate-500 transition group-hover:bg-cyan-400/10 group-hover:text-cyan-300"><ArrowUpRight className="h-4 w-4" /></span>
+        </div>
+      </article>
     </Link>
   );
+}
+
+function Resource({ label, value, icon: Icon, loading }: { label: string; value: number; icon: typeof Cpu; loading: boolean }) {
+  const bar = value >= 90 ? 'bg-rose-400' : value >= 75 ? 'bg-amber-400' : 'bg-cyan-300';
+  return <div><div className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[.1em] text-slate-500"><Icon className="h-3 w-3" />{label}</div><p className="text-lg font-semibold tabular-nums text-slate-100">{loading ? '—' : `${value.toFixed(0)}%`}</p><div className="metric-track mt-2"><div className={`h-full rounded-full ${bar} transition-[width] duration-500`} style={{ width: `${Math.min(value, 100)}%` }} /></div></div>
 }

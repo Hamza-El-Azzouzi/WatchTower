@@ -1,248 +1,69 @@
 'use client';
 
-import {
-  PieChart,
-  Pie,
-  Cell,
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  RadialBarChart,
-  RadialBar,
-} from 'recharts';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { Agent } from '@/types';
-import { Activity, Cpu, HardDrive, Network } from 'lucide-react';
+import { Activity, Cpu, HardDrive, MemoryStick } from 'lucide-react';
 import { useMetricsContext } from '@/contexts/MetricsContext';
 
-interface SystemHealthOverviewProps {
-  agents: Agent[];
-}
-
-interface MetricData {
-  name: string;
-  value: number;
-  color: string;
-}
-
-export default function SystemHealthOverview({ agents }: SystemHealthOverviewProps) {
-  // Get metrics from shared context
+export default function SystemHealthOverview({ agents }: { agents: Agent[] }) {
   const { agentMetrics, initialStateReceived } = useMetricsContext();
-  const loading = !initialStateReceived;
-
-  const getMetricValue = (agentId: string, metricName: string): number => {
-    const metrics = agentMetrics[agentId];
-    if (!metrics) return 0;
-    const metric = metrics.metrics.find(m => m.name === metricName);
-    return metric ? metric.value : 0;
-  };
-
-  // Aggregate data for pie chart - resource distribution
-  const getResourceDistribution = (): MetricData[] => {
-    if (agents.length === 0) return [];
-    
-    const totalCpu = agents.reduce((sum, agent) => sum + getMetricValue(agent.id, 'cpu_usage'), 0);
-    const totalMemory = agents.reduce((sum, agent) => sum + getMetricValue(agent.id, 'memory_usage'), 0);
-    const totalDisk = agents.reduce((sum, agent) => sum + getMetricValue(agent.id, 'disk_usage'), 0);
-    
-    return [
-      { name: 'CPU', value: Number((totalCpu / agents.length).toFixed(1)), color: '#3b82f6' },
-      { name: 'Memory', value: Number((totalMemory / agents.length).toFixed(1)), color: '#10b981' },
-      { name: 'Disk', value: Number((totalDisk / agents.length).toFixed(1)), color: '#f59e0b' },
-    ];
-  };
-
-  // Server comparison data for bar chart
-  const getServerComparisonData = () => {
-    return agents.map(agent => ({
-      name: agent.name.length > 15 ? agent.name.substring(0, 15) + '...' : agent.name,
-      cpu: Number(getMetricValue(agent.id, 'cpu_usage').toFixed(1)),
-      memory: Number(getMetricValue(agent.id, 'memory_usage').toFixed(1)),
-      disk: Number(getMetricValue(agent.id, 'disk_usage').toFixed(1)),
-    }));
-  };
-
-  // Get health score for radial chart
-  const getHealthScore = (): number => {
-    if (agents.length === 0) return 100;
-    
-    const avgCpu = agents.reduce((sum, agent) => sum + getMetricValue(agent.id, 'cpu_usage'), 0) / agents.length;
-    const avgMemory = agents.reduce((sum, agent) => sum + getMetricValue(agent.id, 'memory_usage'), 0) / agents.length;
-    const avgDisk = agents.reduce((sum, agent) => sum + getMetricValue(agent.id, 'disk_usage'), 0) / agents.length;
-    
-    // Calculate health score (100 is perfect, lower is worse)
-    const cpuScore = Math.max(0, 100 - avgCpu);
-    const memoryScore = Math.max(0, 100 - avgMemory);
-    const diskScore = Math.max(0, 100 - avgDisk);
-    
-    return Number(((cpuScore + memoryScore + diskScore) / 3).toFixed(1));
-  };
-
-  const resourceDistribution = getResourceDistribution();
-  const serverComparison = getServerComparisonData();
-  const healthScore = getHealthScore();
-
-  const radialData = [
-    {
-      name: 'Health',
-      value: healthScore,
-      fill: healthScore > 80 ? '#10b981' : healthScore > 60 ? '#f59e0b' : '#ef4444',
-    },
+  const valueOf = (agentId: string, name: string) => agentMetrics[agentId]?.metrics.find(metric => metric.name === name)?.value ?? 0;
+  const average = (name: string) => agents.reduce((sum, agent) => sum + valueOf(agent.id, name), 0) / Math.max(agents.length, 1);
+  const resources = [
+    { name: 'CPU', value: average('cpu_usage'), icon: Cpu, color: '#22d3ee' },
+    { name: 'Memory', value: average('memory_usage'), icon: MemoryStick, color: '#a78bfa' },
+    { name: 'Disk', value: average('disk_usage'), icon: HardDrive, color: '#84cc16' },
   ];
+  const healthScore = Math.round(resources.reduce((sum, resource) => sum + Math.max(0, 100 - resource.value), 0) / resources.length);
+  const comparison = agents.slice(0, 10).map(agent => ({
+    name: agent.name.length > 14 ? `${agent.name.slice(0, 13)}…` : agent.name,
+    CPU: Number(valueOf(agent.id, 'cpu_usage').toFixed(1)),
+    Memory: Number(valueOf(agent.id, 'memory_usage').toFixed(1)),
+    Disk: Number(valueOf(agent.id, 'disk_usage').toFixed(1)),
+  }));
 
-  if (loading || agents.length === 0) {
-    return (
-      <div className="glass-morphism rounded-xl border border-border p-6">
-        <h3 className="text-xl font-bold text-foreground mb-4">System Health Overview</h3>
-        <p className="text-muted-foreground">Loading system health data...</p>
-      </div>
-    );
-  }
+  if (!initialStateReceived) return <div className="surface-panel h-80 animate-pulse rounded-3xl" />;
 
   return (
-    <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-foreground">System Health Overview</h2>
-      
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Overall Health Score */}
-        <div className="glass-morphism rounded-xl border border-border p-6 hover:shadow-lg transition-smooth">
-          <div className="flex items-center gap-3 mb-4">
-            <Activity className="w-5 h-5 text-accent" />
-            <h3 className="text-lg font-semibold text-foreground">Overall Health</h3>
+    <section>
+      <div className="mb-5"><p className="eyebrow">Resource posture</p><h2 className="mt-1 text-xl font-semibold tracking-tight text-white">Fleet health</h2></div>
+      <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
+        <div className="surface-panel rounded-[20px] p-5">
+          <div className="flex items-center gap-2 text-sm font-medium text-slate-200"><Activity className="h-4 w-4 text-cyan-300" /> Health index</div>
+          <div className="my-6 flex items-center gap-5">
+            <div className="relative flex h-28 w-28 shrink-0 items-center justify-center rounded-full" style={{ background: `conic-gradient(${healthScore >= 80 ? '#84cc16' : healthScore >= 60 ? '#fbbf24' : '#fb7185'} ${healthScore * 3.6}deg, rgba(255,255,255,.055) 0deg)` }}><div className="flex h-[88px] w-[88px] flex-col items-center justify-center rounded-full bg-[#0d141e]"><span className="text-3xl font-semibold tracking-tight text-white">{healthScore}</span><span className="text-[9px] uppercase tracking-[.16em] text-slate-500">of 100</span></div></div>
+            <div><p className="font-medium text-slate-100">{healthScore >= 80 ? 'Fleet is stable' : healthScore >= 60 ? 'Watch capacity' : 'Intervention needed'}</p><p className="mt-2 text-xs leading-5 text-slate-500">Weighted from current CPU, memory, and disk headroom.</p></div>
           </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <RadialBarChart
-              cx="50%"
-              cy="50%"
-              innerRadius="60%"
-              outerRadius="90%"
-              data={radialData}
-              startAngle={180}
-              endAngle={0}
-            >
-              <RadialBar
-                background
-                dataKey="value"
-                cornerRadius={10}
-              />
-              <text
-                x="50%"
-                y="50%"
-                textAnchor="middle"
-                dominantBaseline="middle"
-                className="text-3xl font-bold"
-                fill={radialData[0].fill}
-              >
-                {healthScore}%
-              </text>
-            </RadialBarChart>
-          </ResponsiveContainer>
-          <p className="text-center text-sm text-muted-foreground mt-2">
-            {healthScore > 80 ? 'Excellent' : healthScore > 60 ? 'Good' : 'Needs Attention'}
-          </p>
+          <div className="space-y-4 border-t border-white/6 pt-5">
+            {resources.map(resource => <ResourceRow key={resource.name} {...resource} />)}
+          </div>
         </div>
 
-        {/* Average Resource Usage */}
-        <div className="glass-morphism rounded-xl border border-border p-6 hover:shadow-lg transition-smooth">
-          <div className="flex items-center gap-3 mb-4">
-            <Cpu className="w-5 h-5 text-accent" />
-            <h3 className="text-lg font-semibold text-foreground">Resource Distribution</h3>
-          </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie
-                data={resourceDistribution}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, value }) => `${name}: ${value}%`}
-                outerRadius={80}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {resourceDistribution.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: 'rgba(26,26,26,0.95)',
-                  border: '1px solid rgba(99,102,241,0.3)',
-                  borderRadius: '8px',
-                  color: '#f5f5f5',
-                }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Quick Stats */}
-        <div className="glass-morphism rounded-xl border border-border p-6 hover:shadow-lg transition-smooth">
-          <div className="flex items-center gap-3 mb-4">
-            <HardDrive className="w-5 h-5 text-accent" />
-            <h3 className="text-lg font-semibold text-foreground">Quick Stats</h3>
-          </div>
-          <div className="space-y-4">
-            {resourceDistribution.map((item) => (
-              <div key={item.name}>
-                <div className="flex justify-between mb-2">
-                  <span className="text-sm text-muted-foreground">{item.name}</span>
-                  <span className="text-sm font-semibold" style={{ color: item.color }}>
-                    {item.value}%
-                  </span>
-                </div>
-                <div className="w-full bg-background/50 rounded-full h-2">
-                  <div
-                    className="h-2 rounded-full transition-all duration-500"
-                    style={{
-                      width: `${item.value}%`,
-                      backgroundColor: item.color,
-                    }}
-                  />
-                </div>
-              </div>
-            ))}
+        <div className="surface-panel min-w-0 rounded-[20px] p-5">
+          <div className="mb-5 flex items-center justify-between"><div><p className="text-sm font-medium text-slate-200">Node comparison</p><p className="mt-1 text-xs text-slate-500">Utilization by resource · latest sample</p></div><div className="hidden gap-3 text-[10px] text-slate-500 sm:flex"><Legend color="bg-cyan-300" label="CPU" /><Legend color="bg-violet-400" label="Memory" /><Legend color="bg-lime-400" label="Disk" /></div></div>
+          <div className="h-[285px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={comparison} barGap={2}>
+                <CartesianGrid vertical={false} stroke="rgba(148,163,184,.08)" />
+                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 10 }} dy={10} />
+                <YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 10 }} width={30} />
+                <Tooltip cursor={{ fill: 'rgba(255,255,255,.025)' }} contentStyle={{ background: '#0b121b', border: '1px solid #203040', borderRadius: 12, color: '#e2e8f0', fontSize: 12 }} />
+                <Bar dataKey="CPU" fill="#22d3ee" radius={[3, 3, 0, 0]} maxBarSize={16} />
+                <Bar dataKey="Memory" fill="#a78bfa" radius={[3, 3, 0, 0]} maxBarSize={16} />
+                <Bar dataKey="Disk" fill="#84cc16" radius={[3, 3, 0, 0]} maxBarSize={16} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
       </div>
-
-      {/* Server Comparison Chart */}
-      <div className="glass-morphism rounded-xl border border-border p-6 hover:shadow-lg transition-smooth">
-        <div className="flex items-center gap-3 mb-4">
-          <Network className="w-5 h-5 text-accent" />
-          <h3 className="text-lg font-semibold text-foreground">Server Comparison</h3>
-        </div>
-        <ResponsiveContainer width="100%" height={300}>
-          <BarChart data={serverComparison}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-            <XAxis
-              dataKey="name"
-              stroke="#9ca3af"
-              style={{ fontSize: '12px' }}
-              angle={-45}
-              textAnchor="end"
-              height={80}
-            />
-            <YAxis stroke="#9ca3af" style={{ fontSize: '12px' }} domain={[0, 100]} />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: 'rgba(26,26,26,0.95)',
-                border: '1px solid rgba(99,102,241,0.3)',
-                borderRadius: '8px',
-                color: '#f5f5f5',
-              }}
-            />
-            <Legend wrapperStyle={{ color: '#9ca3af' }} />
-            <Bar dataKey="cpu" fill="#3b82f6" name="CPU %" radius={[8, 8, 0, 0]} />
-            <Bar dataKey="memory" fill="#10b981" name="Memory %" radius={[8, 8, 0, 0]} />
-            <Bar dataKey="disk" fill="#f59e0b" name="Disk %" radius={[8, 8, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
+    </section>
   );
+}
+
+function ResourceRow({ name, value, icon: Icon, color }: { name: string; value: number; icon: typeof Cpu; color: string }) {
+  return <div><div className="mb-2 flex items-center justify-between"><span className="flex items-center gap-2 text-xs text-slate-400"><Icon className="h-3.5 w-3.5" />{name}</span><span className="text-xs font-semibold tabular-nums text-slate-200">{value.toFixed(1)}%</span></div><div className="metric-track"><div className="h-full rounded-full" style={{ width: `${Math.min(value, 100)}%`, backgroundColor: color }} /></div></div>;
+}
+
+function Legend({ color, label }: { color: string; label: string }) {
+  return <span className="flex items-center gap-1.5"><span className={`h-1.5 w-1.5 rounded-full ${color}`} />{label}</span>;
 }

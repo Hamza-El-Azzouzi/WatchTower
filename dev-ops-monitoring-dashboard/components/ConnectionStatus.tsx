@@ -22,18 +22,18 @@ export default function ConnectionStatus({
       case 'connected':
         return {
           icon: Wifi,
-          color: 'text-green-400',
-          bgColor: 'bg-green-500/20',
-          borderColor: 'border-green-500/30',
+          color: 'text-lime-300',
+          bgColor: 'bg-lime-400/8',
+          borderColor: 'border-lime-400/15',
           label: 'Live',
           pulse: true,
         };
       case 'connecting':
         return {
           icon: Loader2,
-          color: 'text-yellow-400',
-          bgColor: 'bg-yellow-500/20',
-          borderColor: 'border-yellow-500/30',
+          color: 'text-amber-300',
+          bgColor: 'bg-amber-400/8',
+          borderColor: 'border-amber-400/15',
           label: 'Connecting',
           pulse: false,
           spin: true,
@@ -42,9 +42,9 @@ export default function ConnectionStatus({
       default:
         return {
           icon: WifiOff,
-          color: 'text-red-400',
-          bgColor: 'bg-red-500/20',
-          borderColor: 'border-red-500/30',
+          color: 'text-rose-300',
+          bgColor: 'bg-rose-400/8',
+          borderColor: 'border-rose-400/15',
           label: 'Disconnected',
           pulse: false,
         };
@@ -56,7 +56,7 @@ export default function ConnectionStatus({
 
   return (
     <div 
-      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border ${config.bgColor} ${config.borderColor} ${className}`}
+      className={`flex items-center gap-2 rounded-full border px-3 py-1.5 ${config.bgColor} ${config.borderColor} ${className}`}
       title={`WebSocket: ${state}`}
     >
       <div className="relative">
@@ -64,7 +64,7 @@ export default function ConnectionStatus({
           className={`w-4 h-4 ${config.color} ${config.spin ? 'animate-spin' : ''}`} 
         />
         {config.pulse && (
-          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+          <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-lime-400 rounded-full animate-pulse" />
         )}
       </div>
       {showLabel && (

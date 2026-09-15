@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Shield, Server, Database, Activity, ArrowLeft, Clock, CheckCircle, XCircle, AlertTriangle, Trash2, RefreshCw, Key, Settings } from 'lucide-react'
@@ -30,11 +30,7 @@ export default function AdminAgentDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    loadData()
-  }, [agentId])
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true)
       const [agentsData, keysData] = await Promise.all([
@@ -65,7 +61,11 @@ export default function AdminAgentDetailPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [agentId])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
 
   const getApiKeyName = (apiKeyId?: number) => {
     if (!apiKeyId) return 'Unknown'

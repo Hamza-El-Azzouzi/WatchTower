@@ -51,26 +51,29 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 flex items-center justify-center p-4">
-      <div className="max-w-md w-full">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#070b12] p-4 sm:p-8">
+      <div className="pointer-events-none absolute inset-0 opacity-60" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px)', backgroundSize: '42px 42px' }} />
+      <div className="pointer-events-none absolute -left-32 top-[-12rem] h-[34rem] w-[34rem] rounded-full bg-cyan-400/10 blur-3xl" />
+      <div className="relative z-10 w-full max-w-md">
         {/* Logo/Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-500/20 rounded-2xl mb-4 border border-blue-500/30">
-            <Lock className="w-8 h-8 text-blue-400" />
+          <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-cyan-300 text-[#061016] shadow-[0_0_45px_rgba(34,211,238,.2)]">
+            <Lock className="h-6 w-6" />
           </div>
-          <h1 className="text-3xl font-bold text-white mb-2">DevOps Monitor</h1>
-          <p className="text-gray-400">Enter your API key to access the dashboard</p>
+          <p className="eyebrow mb-2">WatchTower operations</p>
+          <h1 className="text-3xl font-semibold tracking-[-.04em] text-white">Welcome back</h1>
+          <p className="mt-2 text-sm text-slate-400">Use your workspace key to open the command center.</p>
         </div>
 
         {/* Login Card */}
-        <div className="bg-gray-800/50 backdrop-blur-xl rounded-2xl border border-gray-700 p-8 shadow-2xl">
+        <div className="surface-panel rounded-[24px] p-6 sm:p-8">
           <form onSubmit={handleLogin} className="space-y-6">
             {/* Error Message */}
             {error && (
               <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
                 <div>
-                  <h3 className="font-semibold text-red-300 mb-1">Authentication Failed</h3>
+                  <h3 className="font-semibold text-red-300 mb-1">We couldn&apos;t sign you in</h3>
                   <p className="text-sm text-red-200">{error}</p>
                 </div>
               </div>
@@ -87,11 +90,11 @@ export default function LoginPage() {
                 </div>
                 <input
                   id="apiKey"
-                  type="text"
+                type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder="msk_xxxxxxxxxxxxxxxxxxxxxxxxx"
-                  className="block w-full pl-12 pr-4 py-3 bg-gray-900/50 border border-gray-600 rounded-xl text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                  className="block w-full rounded-xl border border-white/10 bg-black/20 py-3 pl-12 pr-4 text-white placeholder-slate-600 transition focus:border-cyan-300/40 focus:ring-2 focus:ring-cyan-300/15"
                   required
                   autoFocus
                   disabled={loading}
@@ -106,7 +109,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading || !apiKey}
-              className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-700 disabled:cursor-not-allowed text-white font-semibold py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2"
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-cyan-300 px-4 py-3 font-semibold text-[#061016] transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
             >
               {loading ? (
                 <>
@@ -136,7 +139,7 @@ export default function LoginPage() {
         {/* Footer Info */}
         <div className="mt-8 text-center">
           <p className="text-sm text-gray-500">
-            🔒 Your API key is stored locally and never shared
+            Tenant-scoped monitoring access
           </p>
           <div className="mt-6 pt-6 border-t border-card-border">
             <button
