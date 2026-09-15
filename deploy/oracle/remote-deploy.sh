@@ -86,6 +86,8 @@ if [[ -n "$AGENT_API_KEY" ]]; then
   [[ -f /usr/local/bin/monitor-agent ]] && cp /usr/local/bin/monitor-agent /usr/local/bin/monitor-agent.previous || true
   install -m 0755 "$release_dir/monitor-agent" /usr/local/bin/monitor-agent
   install -m 0644 "$release_dir/watchtower-agent.service" /etc/systemd/system/watchtower-agent.service
+  install -m 0644 "$release_dir/watchtower-docker-telemetry.service" /etc/systemd/system/watchtower-docker-telemetry.service
+  install -m 0644 "$release_dir/watchtower-docker-telemetry.timer" /etc/systemd/system/watchtower-docker-telemetry.timer
   {
     printf 'AGENT_NAME=%s\n' "$AGENT_NAME"
     printf 'SERVER_URL=http://127.0.0.1:8080\n'
@@ -93,6 +95,12 @@ if [[ -n "$AGENT_API_KEY" ]]; then
     printf 'COLLECTION_INTERVAL=2\n'
     printf 'PROCESS_WATCH_ENABLED=true\n'
     printf 'PROCESS_WATCH_NAMES=%s\n' "$PROCESS_WATCH_NAMES"
+    printf 'SERVICE_WATCH_ENABLED=true\n'
+    printf 'SERVICE_WATCH_NAMES=watchtower-agent,docker,ssh\n'
+    printf 'SERVICE_WATCH_INTERVAL_SECONDS=10\n'
+    printf 'DOCKER_MONITOR_ENABLED=true\n'
+    printf 'DOCKER_MONITOR_ENDPOINT=file:///run/watchtower/docker-telemetry.json\n'
+    printf 'DOCKER_MONITOR_INTERVAL_SECONDS=10\n'
     printf 'DB_MONITOR_ENABLED=true\n'
     printf 'DB_MONITOR_TYPE=postgres\n'
     printf 'DB_MONITOR_HOST=127.0.0.1\n'
@@ -108,12 +116,23 @@ if [[ -n "$AGENT_API_KEY" ]]; then
   } > /etc/watchtower/agent.env
   chmod 0600 /etc/watchtower/agent.env
   systemctl daemon-reload
+  systemctl enable watchtower-docker-telemetry.timer
+  if ! systemctl start watchtower-docker-telemetry.service; then
+    echo "Docker telemetry snapshot failed; restoring the previous agent binary." >&2
+    systemctl disable --now watchtower-docker-telemetry.timer || true
+    if [[ -f /usr/local/bin/monitor-agent.previous ]]; then
+      mv /usr/local/bin/monitor-agent.previous /usr/local/bin/monitor-agent
+    fi
+    exit 1
+  fi
+  systemctl start watchtower-docker-telemetry.timer
   systemctl enable --now watchtower-agent
   systemctl restart watchtower-agent
   if ! systemctl is-active --quiet watchtower-agent; then
     echo "Agent failed to start; restoring its previous binary." >&2
     if [[ -f /usr/local/bin/monitor-agent.previous ]]; then
       mv /usr/local/bin/monitor-agent.previous /usr/local/bin/monitor-agent
+      systemctl disable --now watchtower-docker-telemetry.timer || true
       systemctl restart watchtower-agent
     fi
     exit 1

@@ -70,6 +70,14 @@ pub struct MetricsPayload {
     pub metrics: HashMap<String, f64>,
     #[serde(default)]
     pub processes: Vec<ProcessSnapshot>,
+    #[serde(default)]
+    pub mounts: Vec<MountSnapshot>,
+    #[serde(default)]
+    pub network_interfaces: Vec<NetworkInterfaceSnapshot>,
+    #[serde(default)]
+    pub services: Vec<ServiceSnapshot>,
+    #[serde(default)]
+    pub containers: Vec<ContainerSnapshot>,
 }
 
 /// Bounded, privacy-aware process data supplied by an authenticated agent.
@@ -87,6 +95,74 @@ pub struct ProcessSnapshot {
     pub run_time_seconds: u64,
     /// Executable name only; command-line arguments are never accepted.
     pub command: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MountSnapshot {
+    pub device: String,
+    pub mount_point: String,
+    pub filesystem: String,
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+    pub total_bytes: u64,
+    pub usage_percent: f64,
+    pub inodes_used: u64,
+    pub inodes_total: u64,
+    pub inode_usage_percent: f64,
+    pub read_bytes_per_sec: f64,
+    pub write_bytes_per_sec: f64,
+    pub read_iops: f64,
+    pub write_iops: f64,
+    pub average_latency_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkInterfaceSnapshot {
+    pub interface: String,
+    pub rx_bytes_per_sec: f64,
+    pub tx_bytes_per_sec: f64,
+    pub rx_packets_per_sec: f64,
+    pub tx_packets_per_sec: f64,
+    pub rx_errors: u64,
+    pub tx_errors: u64,
+    pub rx_dropped: u64,
+    pub tx_dropped: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceSnapshot {
+    pub name: String,
+    pub load_state: String,
+    pub active_state: String,
+    pub sub_state: String,
+    pub main_pid: u32,
+    pub restart_count: u64,
+    pub active_for_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContainerSnapshot {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub state: String,
+    pub health: String,
+    pub cpu_percent: f64,
+    pub memory_bytes: u64,
+    pub memory_limit_bytes: u64,
+    pub memory_percent: f64,
+    pub restart_count: u64,
+    pub run_time_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostTelemetrySnapshot {
+    pub agent_id: String,
+    pub timestamp: DateTime<Utc>,
+    pub mounts: Vec<MountSnapshot>,
+    pub network_interfaces: Vec<NetworkInterfaceSnapshot>,
+    pub services: Vec<ServiceSnapshot>,
+    pub containers: Vec<ContainerSnapshot>,
 }
 
 /// Information about a registered agent
@@ -150,6 +226,7 @@ pub struct TimeSeriesStore {
     next_log_id: Arc<RwLock<u64>>,
     // Maximum logs to store
     max_logs: usize,
+    latest_host_telemetry: Arc<RwLock<HashMap<String, HostTelemetrySnapshot>>>,
 }
 
 impl TimeSeriesStore {
@@ -161,6 +238,7 @@ impl TimeSeriesStore {
             logs: Arc::new(RwLock::new(Vec::new())),
             next_log_id: Arc::new(RwLock::new(1)),
             max_logs: 10000, // Keep last 10k logs
+            latest_host_telemetry: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -193,7 +271,22 @@ impl TimeSeriesStore {
         // Register or update agent
         self.register_agent(&payload.agent_id, &payload.agent_id);
 
-        // Insert all metrics
+        self.latest_host_telemetry
+            .write()
+            .expect("host telemetry lock poisoned")
+            .insert(
+                payload.agent_id.clone(),
+                HostTelemetrySnapshot {
+                    agent_id: payload.agent_id.clone(),
+                    timestamp: payload.timestamp,
+                    mounts: payload.mounts,
+                    network_interfaces: payload.network_interfaces,
+                    services: payload.services,
+                    containers: payload.containers,
+                },
+            );
+
+        // Insert all scalar metrics
         for (metric_name, value) in payload.metrics {
             self.insert(
                 payload.agent_id.clone(),
@@ -202,6 +295,14 @@ impl TimeSeriesStore {
                 value,
             );
         }
+    }
+
+    pub fn get_host_telemetry(&self, agent_id: &str) -> Option<HostTelemetrySnapshot> {
+        self.latest_host_telemetry
+            .read()
+            .expect("host telemetry lock poisoned")
+            .get(agent_id)
+            .cloned()
     }
 
     /// Query data points for a specific agent and metric within a time range

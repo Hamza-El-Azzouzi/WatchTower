@@ -141,6 +141,19 @@ collect_network = true
 enabled = true
 names = ["postgres", "nginx"]
 
+# Read-only systemd health. Names may include or omit the .service suffix.
+[service_watch]
+enabled = true
+names = ["watchtower-agent", "docker", "ssh"]
+interval_seconds = 15
+
+# Optional Docker telemetry. Production deployments use a root-generated,
+# sanitized snapshot so the main agent never receives Docker socket access.
+[docker_monitor]
+enabled = false
+endpoint = "file:///run/watchtower/docker-telemetry.json"
+interval_seconds = 15
+
 # Optional: Database monitoring
 [database]
 enabled = true
@@ -159,6 +172,13 @@ comma-separated `PROCESS_WATCH_NAMES` value. Optional database monitoring uses
 `DB_MONITOR_ENABLED`, `DB_MONITOR_TYPE`, `DB_MONITOR_HOST`, `DB_MONITOR_PORT`,
 `DB_MONITOR_DATABASE`, `DB_MONITOR_USERNAME`, `DB_MONITOR_PASSWORD`, and
 `DB_MONITOR_INTERVAL_SECONDS`.
+Systemd observation uses `SERVICE_WATCH_ENABLED`, comma-separated
+`SERVICE_WATCH_NAMES`, and `SERVICE_WATCH_INTERVAL_SECONDS`. Docker observation
+uses `DOCKER_MONITOR_ENABLED`, `DOCKER_MONITOR_ENDPOINT`, and
+`DOCKER_MONITOR_INTERVAL_SECONDS`. Docker access is disabled by default: never
+publish a Docker API endpoint, and do not add the agent user to the `docker`
+group because that is effectively root access. The Oracle deployment installs
+a hardened oneshot timer that writes the sanitized snapshot every 10 seconds.
 Optional file-log collection uses `LOG_COLLECTION_ENABLED`, comma-separated
 `LOG_PATHS`, `LOG_BATCH_SIZE`, and `LOG_BATCH_INTERVAL_SECONDS`. Keep secrets in
 a root-owned environment file with mode `0600`; do not commit them.

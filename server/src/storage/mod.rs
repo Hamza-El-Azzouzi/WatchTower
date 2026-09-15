@@ -1,6 +1,7 @@
 pub mod timeseries;
 
 pub use timeseries::{
-    Agent, DataPoint, LogEntry, LogLevel, LogsPayload, MetricsPayload, ProcessSnapshot,
+    Agent, ContainerSnapshot, DataPoint, HostTelemetrySnapshot, LogEntry, LogLevel, LogsPayload,
+    MetricsPayload, MountSnapshot, NetworkInterfaceSnapshot, ProcessSnapshot, ServiceSnapshot,
     StorageStats, TimeSeriesStore,
 };

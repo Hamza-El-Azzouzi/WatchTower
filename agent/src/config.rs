@@ -16,6 +16,50 @@ pub struct Config {
     pub logs: Option<LogsConfig>,
     #[serde(default)]
     pub process_watch: ProcessWatchConfig,
+    #[serde(default)]
+    pub service_watch: ServiceWatchConfig,
+    #[serde(default)]
+    pub docker_monitor: DockerMonitorConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceWatchConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_service_names")]
+    pub names: Vec<String>,
+    #[serde(default = "default_deep_collection_interval")]
+    pub interval_seconds: u64,
+}
+
+impl Default for ServiceWatchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            names: default_service_names(),
+            interval_seconds: default_deep_collection_interval(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DockerMonitorConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_docker_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_deep_collection_interval")]
+    pub interval_seconds: u64,
+}
+
+impl Default for DockerMonitorConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: default_docker_endpoint(),
+            interval_seconds: default_deep_collection_interval(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -133,6 +177,21 @@ fn default_database_interval() -> u64 {
     15
 }
 
+fn default_deep_collection_interval() -> u64 {
+    15
+}
+
+fn default_docker_endpoint() -> String {
+    "file:///run/watchtower/docker-telemetry.json".to_string()
+}
+
+fn default_service_names() -> Vec<String> {
+    ["watchtower-agent", "docker", "ssh"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let contents = fs::read_to_string(path)?;
@@ -164,6 +223,8 @@ impl Config {
             database: None,
             logs: None,
             process_watch: ProcessWatchConfig::default(),
+            service_watch: ServiceWatchConfig::default(),
+            docker_monitor: DockerMonitorConfig::default(),
         }
     }
 
@@ -202,6 +263,27 @@ impl Config {
                 .filter(|name| !name.is_empty())
                 .map(str::to_string)
                 .collect();
+        }
+
+        if let Some(enabled) = env_bool("SERVICE_WATCH_ENABLED") {
+            self.service_watch.enabled = enabled;
+        }
+        if let Ok(names) = std::env::var("SERVICE_WATCH_NAMES") {
+            self.service_watch.names = split_csv(&names);
+        }
+        if let Ok(interval) = std::env::var("SERVICE_WATCH_INTERVAL_SECONDS") {
+            if let Ok(interval) = interval.parse::<u64>() {
+                self.service_watch.interval_seconds = interval.max(5);
+            }
+        }
+        if let Some(enabled) = env_bool("DOCKER_MONITOR_ENABLED") {
+            self.docker_monitor.enabled = enabled;
+        }
+        set_nonempty_env("DOCKER_MONITOR_ENDPOINT", &mut self.docker_monitor.endpoint);
+        if let Ok(interval) = std::env::var("DOCKER_MONITOR_INTERVAL_SECONDS") {
+            if let Ok(interval) = interval.parse::<u64>() {
+                self.docker_monitor.interval_seconds = interval.max(5);
+            }
         }
 
         if let Some(enabled) = env_bool("DB_MONITOR_ENABLED") {
@@ -293,6 +375,15 @@ fn set_nonempty_env(name: &str, target: &mut String) {
             *target = value;
         }
     }
+}
+
+fn split_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 #[cfg(test)]

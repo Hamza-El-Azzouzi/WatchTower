@@ -7,6 +7,10 @@ use std::time::Duration;
 use tracing::{debug, error, warn};
 
 use crate::collector::process::ProcessSnapshot;
+use crate::collector::{
+    disk::MountSnapshot, docker::ContainerSnapshot, network::NetworkInterfaceSnapshot,
+    service::ServiceSnapshot,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsPayload {
@@ -15,6 +19,14 @@ pub struct MetricsPayload {
     pub metrics: HashMap<String, f64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub processes: Vec<ProcessSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mounts: Vec<MountSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub network_interfaces: Vec<NetworkInterfaceSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<ServiceSnapshot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub containers: Vec<ContainerSnapshot>,
 }
 
 pub struct MetricsSender {

@@ -16,6 +16,18 @@ collect_network = true
 enabled = false
 names = ["postgres", "nginx"]
 
+[service_watch]
+enabled = true
+names = ["watchtower-agent", "docker", "ssh"]
+interval_seconds = 15
+
+# Disabled until a loopback-only, GET-only Docker telemetry endpoint is
+# deliberately configured. Never expose the Docker API on a public interface.
+[docker_monitor]
+enabled = false
+endpoint = "file:///run/watchtower/docker-telemetry.json"
+interval_seconds = 15
+
 [server]
 enabled = true
 url = "http://10.1.17.1:8080"

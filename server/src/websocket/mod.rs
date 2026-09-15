@@ -14,7 +14,10 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
-use crate::storage::{Agent, DataPoint, ProcessSnapshot, TimeSeriesStore};
+use crate::storage::{
+    Agent, ContainerSnapshot, DataPoint, HostTelemetrySnapshot, MountSnapshot,
+    NetworkInterfaceSnapshot, ProcessSnapshot, ServiceSnapshot, TimeSeriesStore,
+};
 
 #[derive(Clone)]
 enum AccessScope {
@@ -35,6 +38,7 @@ impl AccessScope {
             WsMessage::Metric { agent_id, .. }
             | WsMessage::MetricBatch { agent_id, .. }
             | WsMessage::ProcessSnapshot { agent_id, .. }
+            | WsMessage::HostTelemetry { agent_id, .. }
             | WsMessage::Log { agent_id, .. }
             | WsMessage::Alert { agent_id, .. }
             | WsMessage::HistoricalMetrics { agent_id, .. } => self.allows(agent_id),
@@ -101,6 +105,14 @@ pub enum WsMessage {
         processes: Vec<ProcessSnapshot>,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
+    HostTelemetry {
+        agent_id: String,
+        mounts: Vec<MountSnapshot>,
+        network_interfaces: Vec<NetworkInterfaceSnapshot>,
+        services: Vec<ServiceSnapshot>,
+        containers: Vec<ContainerSnapshot>,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
     // Real-time log entry
     Log {
         agent_id: String,
@@ -123,6 +135,7 @@ pub enum WsMessage {
     InitialState {
         agents: Vec<AgentSnapshot>,
         metrics: Vec<MetricSnapshot>,
+        host_telemetry: Vec<HostTelemetrySnapshot>,
     },
     // Historical metrics batch for a specific agent
     HistoricalMetrics {
@@ -239,8 +252,9 @@ async fn handle_metrics_socket(mut socket: WebSocket, state: Arc<crate::api::App
         info!(
             "Sent initial state with {} agents, {} metrics",
             match &initial_state {
-                WsMessage::InitialState { agents, metrics } =>
-                    format!("{}, {}", agents.len(), metrics.len()),
+                WsMessage::InitialState {
+                    agents, metrics, ..
+                } => format!("{}, {}", agents.len(), metrics.len()),
                 _ => "?".to_string(),
             },
             ""
@@ -310,6 +324,10 @@ fn build_initial_state(store: &TimeSeriesStore, scope: &AccessScope) -> WsMessag
         .collect();
     let agent_snapshots: Vec<AgentSnapshot> = agents.iter().map(|a| a.into()).collect();
     let mut metric_snapshots: Vec<MetricSnapshot> = Vec::new();
+    let host_telemetry = agents
+        .iter()
+        .filter_map(|agent| store.get_host_telemetry(&agent.id))
+        .collect();
 
     // Get latest value for each metric for each agent
     for agent in &agents {
@@ -329,6 +347,7 @@ fn build_initial_state(store: &TimeSeriesStore, scope: &AccessScope) -> WsMessag
     WsMessage::InitialState {
         agents: agent_snapshots,
         metrics: metric_snapshots,
+        host_telemetry,
     }
 }
 

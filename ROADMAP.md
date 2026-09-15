@@ -44,11 +44,11 @@ Administrators must generate replacement keys after upgrading.
 ## 4. Deeper Monitoring
 
 - [x] Configurable process monitoring (running state, instances, CPU, and memory)
-- [ ] Service-manager monitoring (systemd/launchd/Windows services)
-- [ ] Container monitoring
-- [ ] Per-mount disk metrics
-- [ ] Per-interface network rates
-- [ ] Uptime and load averages
+- [x] Read-only systemd service state, PID, uptime, and restart monitoring
+- [x] Opt-in read-only Docker CPU, memory, health, uptime, and restart monitoring
+- [x] Per-mount capacity, inode, throughput, IOPS, and latency metrics
+- [x] Per-interface network rates, packet rates, errors, and drops
+- [x] Uptime, load averages, CPU modes, memory pressure, swap, OOM, and TCP metrics
 
 ## 5. Operations UX
 

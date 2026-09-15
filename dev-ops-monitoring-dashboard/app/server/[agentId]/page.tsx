@@ -9,12 +9,13 @@ import MetricsSection from '@/components/MetricsSection';
 import AlertThresholdChart from '@/components/AlertThresholdChart';
 import ConnectionStatus from '@/components/ConnectionStatus';
 import ProcessWatch from '@/components/ProcessWatch';
+import HostTelemetryPanel from '@/components/HostTelemetryPanel';
 import IncidentTimeline from '@/components/IncidentTimeline';
 import { getEffectiveAlertRules, type AlertRule } from '@/lib/alerts-api';
 import { formatRelativeTime } from '@/lib/metrics-utils';
 import { Agent, LatestMetrics, Metric } from '@/types';
 import { useMetricsWebSocket } from '@/hooks/useWebSocket';
-import { ProcessSnapshot, WsMetricMessage, WsAgentSnapshot, WsMetricSnapshot, WsProcessSnapshotMessage } from '@/lib/websocket';
+import { HostTelemetrySnapshot, ProcessSnapshot, WsHostTelemetryMessage, WsMetricMessage, WsAgentSnapshot, WsMetricSnapshot, WsProcessSnapshotMessage } from '@/lib/websocket';
 
 export default function ServerDetailPage() {
   const params = useParams();
@@ -27,6 +28,7 @@ export default function ServerDetailPage() {
   const [lastUpdated, setLastUpdated] = useState(new Date());
   const [processes, setProcesses] = useState<ProcessSnapshot[]>([]);
   const [processesUpdatedAt, setProcessesUpdatedAt] = useState<string | null>(null);
+  const [hostTelemetry, setHostTelemetry] = useState<HostTelemetrySnapshot | null>(null);
   const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
 
   useEffect(() => {
@@ -46,7 +48,7 @@ export default function ServerDetailPage() {
   }, [alertRules]);
 
   // Handle initial state from WebSocket - replaces HTTP fetch
-  const handleInitialState = useCallback((agents: WsAgentSnapshot[], metricsSnapshots: WsMetricSnapshot[]) => {
+  const handleInitialState = useCallback((agents: WsAgentSnapshot[], metricsSnapshots: WsMetricSnapshot[], telemetry: HostTelemetrySnapshot[]) => {
     console.log('[ServerDetail] Received initial state');
     
     // Find this agent
@@ -72,6 +74,7 @@ export default function ServerDetailPage() {
         })),
       });
     }
+    setHostTelemetry(telemetry.find(snapshot => snapshot.agent_id === agentId) ?? null);
     
     setLoading(false);
     setLastUpdated(new Date());
@@ -129,10 +132,16 @@ export default function ServerDetailPage() {
     setProcessesUpdatedAt(message.timestamp);
   }, [agentId]);
 
+  const handleHostTelemetry = useCallback((message: WsHostTelemetryMessage) => {
+    if (message.agent_id !== agentId) return;
+    setHostTelemetry(message);
+  }, [agentId]);
+
   // Connect to WebSocket - this is the ONLY data source
   const { isConnected, connectionState, initialStateReceived } = useMetricsWebSocket({
     onMetric: handleMetricUpdate,
     onProcessSnapshot: handleProcessSnapshot,
+    onHostTelemetry: handleHostTelemetry,
     onInitialState: handleInitialState,
   });
 
@@ -192,6 +201,8 @@ export default function ServerDetailPage() {
           <>
             <h2 className="text-2xl font-bold text-foreground mb-6">Current Metrics</h2>
             <MetricsSection metrics={metrics} loading={loading} />
+
+            <HostTelemetryPanel telemetry={hostTelemetry} metrics={metrics} />
 
             <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Process Explorer</h2>
             <ProcessWatch processes={processes} updatedAt={processesUpdatedAt} />

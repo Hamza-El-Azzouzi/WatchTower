@@ -1,10 +1,13 @@
 pub mod cpu;
 pub mod disk;
+pub mod docker;
 pub mod gpu;
+pub mod host;
 pub mod logs;
 pub mod memory;
 pub mod network;
 pub mod process;
+pub mod service;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -31,6 +34,7 @@ pub struct SystemMetrics {
     pub gpu_usage_percent: Option<f32>, // GPU usage
     pub gpu_memory_used: Option<u64>,   // GPU memory used
     pub gpu_memory_total: Option<u64>,  // GPU memory total
+    pub host: host::HostMetrics,
 }
 
 impl SystemMetrics {
@@ -57,6 +61,69 @@ impl SystemMetrics {
         metrics.insert("disk_total_bytes".to_string(), self.disk_total_bytes as f64);
         metrics.insert("network_rx_bytes".to_string(), self.network_rx_bytes as f64);
         metrics.insert("network_tx_bytes".to_string(), self.network_tx_bytes as f64);
+        metrics.insert(
+            "network_rx_bytes_per_sec".to_string(),
+            self.network_rx_bytes as f64,
+        );
+        metrics.insert(
+            "network_tx_bytes_per_sec".to_string(),
+            self.network_tx_bytes as f64,
+        );
+        metrics.insert("load_1".to_string(), self.host.load_1);
+        metrics.insert("load_5".to_string(), self.host.load_5);
+        metrics.insert("load_15".to_string(), self.host.load_15);
+        metrics.insert(
+            "uptime_seconds".to_string(),
+            self.host.uptime_seconds as f64,
+        );
+        metrics.insert("cpu_user_percent".to_string(), self.host.cpu_user_percent);
+        metrics.insert(
+            "cpu_system_percent".to_string(),
+            self.host.cpu_system_percent,
+        );
+        metrics.insert(
+            "cpu_iowait_percent".to_string(),
+            self.host.cpu_iowait_percent,
+        );
+        metrics.insert("cpu_steal_percent".to_string(), self.host.cpu_steal_percent);
+        metrics.insert(
+            "memory_available_bytes".to_string(),
+            self.host.memory_available_bytes as f64,
+        );
+        metrics.insert(
+            "memory_cached_bytes".to_string(),
+            self.host.memory_cached_bytes as f64,
+        );
+        metrics.insert(
+            "swap_in_bytes_per_sec".to_string(),
+            self.host.swap_in_bytes_per_sec,
+        );
+        metrics.insert(
+            "swap_out_bytes_per_sec".to_string(),
+            self.host.swap_out_bytes_per_sec,
+        );
+        metrics.insert(
+            "oom_kills_total".to_string(),
+            self.host.oom_kills_total as f64,
+        );
+        metrics.insert(
+            "oom_kills_delta".to_string(),
+            self.host.oom_kills_delta as f64,
+        );
+        metrics.insert(
+            "tcp_connections_total".to_string(),
+            self.host.tcp_total as f64,
+        );
+        metrics.insert(
+            "tcp_established".to_string(),
+            self.host.tcp_established as f64,
+        );
+        metrics.insert("tcp_listen".to_string(), self.host.tcp_listen as f64);
+        metrics.insert("tcp_time_wait".to_string(), self.host.tcp_time_wait as f64);
+        metrics.insert(
+            "tcp_close_wait".to_string(),
+            self.host.tcp_close_wait as f64,
+        );
 
         // Per-core CPU metrics
         for (i, usage) in self.cpu_per_core.iter().enumerate() {

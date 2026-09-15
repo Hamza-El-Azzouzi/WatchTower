@@ -15,6 +15,8 @@ trap 'rm -rf "$release_dir"' EXIT
 cp deploy/oracle/compose.yml "$release_dir/compose.yml"
 cp deploy/oracle/Caddyfile "$release_dir/Caddyfile"
 cp deploy/oracle/watchtower-agent.service "$release_dir/watchtower-agent.service"
+cp deploy/oracle/watchtower-docker-telemetry.service "$release_dir/watchtower-docker-telemetry.service"
+cp deploy/oracle/watchtower-docker-telemetry.timer "$release_dir/watchtower-docker-telemetry.timer"
 cp deploy/oracle/remote-deploy.sh "$release_dir/remote-deploy.sh"
 cp release/monitor-agent "$release_dir/monitor-agent"
 

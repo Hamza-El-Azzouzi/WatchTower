@@ -5,7 +5,8 @@ mod sender;
 
 use anyhow::Result;
 use chrono::Local;
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::time;
@@ -13,11 +14,14 @@ use tracing::{debug, error, info, warn};
 
 use collector::{
     cpu::CpuCollector,
-    disk::DiskCollector,
+    disk::{DiskCollector, MountSnapshot},
+    docker::{ContainerSnapshot, DockerCollector},
     gpu::{GpuCollector, TemperatureCollector},
+    host::HostCollector,
     memory::MemoryCollector,
-    network::NetworkCollector,
+    network::{NetworkCollector, NetworkInterfaceSnapshot},
     process::ProcessCollector,
+    service::{ServiceCollector, ServiceSnapshot},
     SystemMetrics,
 };
 use collectors::database::DatabaseCollector;
@@ -30,6 +34,9 @@ use sender::{MetricsPayload, MetricsSender};
 #[command(version = "0.1.0")]
 #[command(about = "System monitoring agent for collecting metrics", long_about = None)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Path to configuration file
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
@@ -43,6 +50,17 @@ struct Args {
     verbose: bool,
 }
 
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Write a sanitized Docker telemetry snapshot for the unprivileged agent.
+    DockerSnapshot {
+        #[arg(long, default_value = "/var/run/docker.sock")]
+        socket: PathBuf,
+        #[arg(long, default_value = "/run/watchtower/docker-telemetry.json")]
+        output: PathBuf,
+    },
+}
+
 struct MetricCollectors {
     cpu: CpuCollector,
     memory: MemoryCollector,
@@ -51,6 +69,8 @@ struct MetricCollectors {
     gpu: GpuCollector,
     temperature: TemperatureCollector,
     process: ProcessCollector,
+    host: HostCollector,
+    service: ServiceCollector,
 }
 
 impl MetricCollectors {
@@ -63,10 +83,19 @@ impl MetricCollectors {
             gpu: GpuCollector::new(),
             temperature: TemperatureCollector::new(),
             process: ProcessCollector::new(),
+            host: HostCollector::new(),
+            service: ServiceCollector,
         }
     }
 
-    fn collect(&mut self, config: &Config) -> SystemMetrics {
+    fn collect(
+        &mut self,
+        config: &Config,
+    ) -> (
+        SystemMetrics,
+        Vec<MountSnapshot>,
+        Vec<NetworkInterfaceSnapshot>,
+    ) {
         // Collect CPU metrics in one pass (more efficient)
         let (cpu_percent, cpu_per_core) = if config.metrics.collect_cpu {
             self.cpu.collect_all()
@@ -86,17 +115,19 @@ impl MetricCollectors {
             (0, 0, 0.0)
         };
 
-        let (disk_used, disk_total, disk_percent) = if config.metrics.collect_disk {
-            self.disk.collect()
+        let ((disk_used, disk_total, disk_percent), mounts) = if config.metrics.collect_disk {
+            self.disk.collect_all()
         } else {
-            (0, 0, 0.0)
+            ((0, 0, 0.0), Vec::new())
         };
 
-        let (network_rx, network_tx) = if config.metrics.collect_network {
-            self.network.collect()
+        let ((network_rx, network_tx), network_interfaces) = if config.metrics.collect_network {
+            self.network.collect_all()
         } else {
-            (0, 0)
+            ((0, 0), Vec::new())
         };
+
+        let host = self.host.collect();
 
         // Collect temperature metrics
         let cpu_temp_celsius = self.temperature.collect_cpu_temp();
@@ -109,7 +140,7 @@ impl MetricCollectors {
             None => (None, None),
         };
 
-        SystemMetrics {
+        let metrics = SystemMetrics {
             cpu_percent,
             cpu_per_core,
             memory_used_bytes: memory_used,
@@ -128,7 +159,10 @@ impl MetricCollectors {
             gpu_usage_percent,
             gpu_memory_used,
             gpu_memory_total,
-        }
+            host,
+        };
+
+        (metrics, mounts, network_interfaces)
     }
 
     fn collect_processes(
@@ -139,6 +173,10 @@ impl MetricCollectors {
         Vec<collector::process::ProcessSnapshot>,
     ) {
         self.process.collect(watched_names, 256)
+    }
+
+    fn collect_services(&self, names: &[String], uptime_seconds: u64) -> Vec<ServiceSnapshot> {
+        self.service.collect(names, uptime_seconds)
     }
 }
 
@@ -228,10 +266,31 @@ async fn run_agent(config: Config) -> Result<()> {
     };
 
     let mut collectors = MetricCollectors::new();
+    let docker_collector = if config.docker_monitor.enabled {
+        match DockerCollector::new(config.docker_monitor.endpoint.clone()) {
+            Ok(collector) => {
+                info!(
+                    "Read-only Docker telemetry enabled through {}",
+                    config.docker_monitor.endpoint
+                );
+                Some(collector)
+            }
+            Err(error) => {
+                warn!("Docker telemetry disabled: {}", error);
+                None
+            }
+        }
+    } else {
+        None
+    };
     let interval = Duration::from_secs(config.collection.interval_seconds);
     let mut interval_timer = time::interval(interval);
     interval_timer.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
     let mut last_database_collection: Option<Instant> = None;
+    let mut last_service_collection: Option<Instant> = None;
+    let mut last_docker_collection: Option<Instant> = None;
+    let mut service_snapshots: Vec<ServiceSnapshot> = Vec::new();
+    let mut container_snapshots: Vec<ContainerSnapshot> = Vec::new();
 
     println!("\n{:-^80}", " Monitoring Agent Started ");
     println!(
@@ -250,7 +309,7 @@ async fn run_agent(config: Config) -> Result<()> {
         interval_timer.tick().await;
 
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
-        let metrics = collectors.collect(&config);
+        let (metrics, mounts, network_interfaces) = collectors.collect(&config);
 
         // Display metrics locally
         print!("[{}] ", timestamp);
@@ -267,6 +326,40 @@ async fn run_agent(config: Config) -> Result<()> {
                 metrics_map.extend(process_metrics);
                 process_snapshot = processes;
             }
+
+            let service_due = config.service_watch.enabled
+                && last_service_collection.is_none_or(|last| {
+                    last.elapsed()
+                        >= Duration::from_secs(config.service_watch.interval_seconds.max(5))
+                });
+            if service_due {
+                service_snapshots = collectors
+                    .collect_services(&config.service_watch.names, metrics.host.uptime_seconds);
+                last_service_collection = Some(Instant::now());
+            }
+
+            let docker_due = docker_collector.is_some()
+                && last_docker_collection.is_none_or(|last| {
+                    last.elapsed()
+                        >= Duration::from_secs(config.docker_monitor.interval_seconds.max(5))
+                });
+            if docker_due {
+                if let Some(collector) = docker_collector.as_ref() {
+                    match collector.collect().await {
+                        Ok(containers) => container_snapshots = containers,
+                        Err(error) => warn!("Failed to collect Docker telemetry: {}", error),
+                    }
+                }
+                last_docker_collection = Some(Instant::now());
+            }
+
+            add_deep_telemetry_metrics(
+                &mut metrics_map,
+                &mounts,
+                &network_interfaces,
+                &service_snapshots,
+                &container_snapshots,
+            );
 
             // Collect database metrics if database collector is enabled
             let database_due = config.database.as_ref().is_some_and(|database| {
@@ -296,6 +389,10 @@ async fn run_agent(config: Config) -> Result<()> {
                 timestamp: chrono::Utc::now(),
                 metrics: metrics_map,
                 processes: process_snapshot,
+                mounts,
+                network_interfaces,
+                services: service_snapshots.clone(),
+                containers: container_snapshots.clone(),
             };
 
             if let Err(e) = sender.send_metrics(&payload).await {
@@ -331,6 +428,113 @@ async fn run_agent(config: Config) -> Result<()> {
     }
 }
 
+fn add_deep_telemetry_metrics(
+    metrics: &mut std::collections::HashMap<String, f64>,
+    mounts: &[MountSnapshot],
+    interfaces: &[NetworkInterfaceSnapshot],
+    services: &[ServiceSnapshot],
+    containers: &[ContainerSnapshot],
+) {
+    metrics.insert(
+        "disk_read_bytes_per_sec".to_string(),
+        mounts.iter().map(|mount| mount.read_bytes_per_sec).sum(),
+    );
+    metrics.insert(
+        "disk_write_bytes_per_sec".to_string(),
+        mounts.iter().map(|mount| mount.write_bytes_per_sec).sum(),
+    );
+    metrics.insert(
+        "disk_read_iops".to_string(),
+        mounts.iter().map(|mount| mount.read_iops).sum(),
+    );
+    metrics.insert(
+        "disk_write_iops".to_string(),
+        mounts.iter().map(|mount| mount.write_iops).sum(),
+    );
+    metrics.insert(
+        "disk_max_latency_ms".to_string(),
+        mounts
+            .iter()
+            .map(|mount| mount.average_latency_ms)
+            .fold(0.0, f64::max),
+    );
+    metrics.insert(
+        "inode_max_usage".to_string(),
+        mounts
+            .iter()
+            .map(|mount| mount.inode_usage_percent)
+            .fold(0.0, f64::max),
+    );
+    metrics.insert(
+        "network_rx_errors_total".to_string(),
+        interfaces
+            .iter()
+            .map(|interface| interface.rx_errors)
+            .sum::<u64>() as f64,
+    );
+    metrics.insert(
+        "network_tx_errors_total".to_string(),
+        interfaces
+            .iter()
+            .map(|interface| interface.tx_errors)
+            .sum::<u64>() as f64,
+    );
+    metrics.insert(
+        "network_dropped_total".to_string(),
+        interfaces
+            .iter()
+            .map(|interface| interface.rx_dropped + interface.tx_dropped)
+            .sum::<u64>() as f64,
+    );
+    metrics.insert("services_total".to_string(), services.len() as f64);
+    metrics.insert(
+        "services_unhealthy".to_string(),
+        services
+            .iter()
+            .filter(|service| service.active_state != "active")
+            .count() as f64,
+    );
+    metrics.insert(
+        "service_restarts_total".to_string(),
+        services
+            .iter()
+            .map(|service| service.restart_count)
+            .sum::<u64>() as f64,
+    );
+    metrics.insert("containers_total".to_string(), containers.len() as f64);
+    metrics.insert(
+        "containers_unhealthy".to_string(),
+        containers
+            .iter()
+            .filter(|container| {
+                container.state != "running"
+                    || matches!(container.health.as_str(), "unhealthy" | "starting")
+            })
+            .count() as f64,
+    );
+    metrics.insert(
+        "container_restarts_total".to_string(),
+        containers
+            .iter()
+            .map(|container| container.restart_count)
+            .sum::<u64>() as f64,
+    );
+    metrics.insert(
+        "container_cpu_percent".to_string(),
+        containers
+            .iter()
+            .map(|container| container.cpu_percent)
+            .sum(),
+    );
+    metrics.insert(
+        "container_memory_bytes".to_string(),
+        containers
+            .iter()
+            .map(|container| container.memory_bytes)
+            .sum::<u64>() as f64,
+    );
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -347,6 +551,11 @@ async fn main() -> Result<()> {
         .with_file(false)
         .with_line_number(false)
         .init();
+
+    if let Some(Command::DockerSnapshot { socket, output }) = args.command {
+        write_docker_snapshot(socket, output).await?;
+        return Ok(());
+    }
 
     // Load configuration
     let mut config = if let Some(config_path) = args.config {
@@ -378,5 +587,20 @@ async fn main() -> Result<()> {
         std::process::exit(1);
     }
 
+    Ok(())
+}
+
+async fn write_docker_snapshot(socket: PathBuf, output: PathBuf) -> Result<()> {
+    let snapshots = DockerCollector::from_unix_socket(socket).collect().await?;
+    let temporary = output.with_extension("json.tmp");
+    let contents = serde_json::to_vec(&snapshots)?;
+    std::fs::write(&temporary, contents)?;
+    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o640))?;
+    std::fs::rename(&temporary, &output)?;
+    info!(
+        "Wrote {} sanitized Docker snapshots to {}",
+        snapshots.len(),
+        output.display()
+    );
     Ok(())
 }

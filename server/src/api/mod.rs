@@ -24,6 +24,11 @@ const MAX_METRICS_PER_PAYLOAD: usize = 512;
 const MAX_METRIC_NAME_LEN: usize = 128;
 const MAX_PROCESSES_PER_PAYLOAD: usize = 256;
 const MAX_PROCESS_TEXT_LEN: usize = 96;
+const MAX_MOUNTS_PER_PAYLOAD: usize = 128;
+const MAX_INTERFACES_PER_PAYLOAD: usize = 128;
+const MAX_SERVICES_PER_PAYLOAD: usize = 64;
+const MAX_CONTAINERS_PER_PAYLOAD: usize = 64;
+const MAX_TELEMETRY_TEXT_LEN: usize = 192;
 const MAX_LOGS_PER_PAYLOAD: usize = 500;
 const MAX_LOG_SOURCE_LEN: usize = 512;
 const MAX_LOG_MESSAGE_LEN: usize = 16_384;
@@ -73,6 +78,72 @@ fn validate_metrics_payload(payload: &MetricsPayload) -> Result<(), ApiError> {
     {
         return Err(ApiError::BadRequest(
             "process snapshot is too large or contains invalid data".to_string(),
+        ));
+    }
+
+    let invalid_text = |value: &str| {
+        value.is_empty()
+            || value.len() > MAX_TELEMETRY_TEXT_LEN
+            || value.chars().any(char::is_control)
+    };
+    let invalid_number = |value: f64| !value.is_finite() || !(0.0..=1.0e18).contains(&value);
+
+    if payload.mounts.len() > MAX_MOUNTS_PER_PAYLOAD
+        || payload.mounts.iter().any(|mount| {
+            invalid_text(&mount.device)
+                || invalid_text(&mount.mount_point)
+                || invalid_text(&mount.filesystem)
+                || invalid_number(mount.usage_percent)
+                || invalid_number(mount.inode_usage_percent)
+                || invalid_number(mount.read_bytes_per_sec)
+                || invalid_number(mount.write_bytes_per_sec)
+                || invalid_number(mount.read_iops)
+                || invalid_number(mount.write_iops)
+                || invalid_number(mount.average_latency_ms)
+        })
+    {
+        return Err(ApiError::BadRequest(
+            "mount telemetry is too large or contains invalid data".to_string(),
+        ));
+    }
+    if payload.network_interfaces.len() > MAX_INTERFACES_PER_PAYLOAD
+        || payload.network_interfaces.iter().any(|interface| {
+            invalid_text(&interface.interface)
+                || invalid_number(interface.rx_bytes_per_sec)
+                || invalid_number(interface.tx_bytes_per_sec)
+                || invalid_number(interface.rx_packets_per_sec)
+                || invalid_number(interface.tx_packets_per_sec)
+        })
+    {
+        return Err(ApiError::BadRequest(
+            "network telemetry is too large or contains invalid data".to_string(),
+        ));
+    }
+    if payload.services.len() > MAX_SERVICES_PER_PAYLOAD
+        || payload.services.iter().any(|service| {
+            invalid_text(&service.name)
+                || invalid_text(&service.load_state)
+                || invalid_text(&service.active_state)
+                || invalid_text(&service.sub_state)
+        })
+    {
+        return Err(ApiError::BadRequest(
+            "service telemetry is too large or contains invalid data".to_string(),
+        ));
+    }
+    if payload.containers.len() > MAX_CONTAINERS_PER_PAYLOAD
+        || payload.containers.iter().any(|container| {
+            invalid_text(&container.id)
+                || invalid_text(&container.name)
+                || invalid_text(&container.image)
+                || invalid_text(&container.state)
+                || invalid_text(&container.health)
+                || invalid_number(container.cpu_percent)
+                || invalid_number(container.memory_percent)
+        })
+    {
+        return Err(ApiError::BadRequest(
+            "container telemetry is too large or contains invalid data".to_string(),
         ));
     }
 
@@ -310,6 +381,15 @@ pub async fn ingest_metrics(
         }
     }
 
+    state.ws_manager.broadcast_metric(WsMessage::HostTelemetry {
+        agent_id: payload.agent_id.clone(),
+        mounts: payload.mounts.clone(),
+        network_interfaces: payload.network_interfaces.clone(),
+        services: payload.services.clone(),
+        containers: payload.containers.clone(),
+        timestamp: payload.timestamp,
+    });
+
     // Persist at a lower cadence in the background. This keeps historical data
     // durable without turning fast live samples into excessive database rows.
     if state.claim_metrics_persistence(&payload.agent_id) {
@@ -357,6 +437,10 @@ mod payload_validation_tests {
             timestamp: Utc::now(),
             metrics,
             processes: Vec::new(),
+            mounts: Vec::new(),
+            network_interfaces: Vec::new(),
+            services: Vec::new(),
+            containers: Vec::new(),
         }
     }
 
@@ -375,6 +459,29 @@ mod payload_validation_tests {
             .map(|index| (format!("metric_{index}"), index as f64))
             .collect();
         assert!(validate_metrics_payload(&payload("agent-01", too_many)).is_err());
+    }
+
+    #[test]
+    fn rejects_non_finite_structured_telemetry() {
+        let mut payload = payload("agent-01", HashMap::from([("cpu_usage".to_string(), 1.0)]));
+        payload.mounts.push(crate::storage::MountSnapshot {
+            device: "/dev/sda1".to_string(),
+            mount_point: "/".to_string(),
+            filesystem: "ext4".to_string(),
+            used_bytes: 1,
+            available_bytes: 1,
+            total_bytes: 2,
+            usage_percent: f64::NAN,
+            inodes_used: 1,
+            inodes_total: 2,
+            inode_usage_percent: 50.0,
+            read_bytes_per_sec: 0.0,
+            write_bytes_per_sec: 0.0,
+            read_iops: 0.0,
+            write_iops: 0.0,
+            average_latency_ms: 0.0,
+        });
+        assert!(validate_metrics_payload(&payload).is_err());
     }
 }
 

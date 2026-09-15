@@ -43,6 +43,11 @@ const nextConfig = {
     unoptimized: true,
   },
   output: 'standalone',
+  // Use the stable compiler API path. The experimental CLI path can emit
+  // non-JSON wrapper output in confined Node installations and break builds.
+  experimental: {
+    useTypeScriptCli: false,
+  },
   async headers() {
     return [{ source: '/(.*)', headers: securityHeaders }]
   },

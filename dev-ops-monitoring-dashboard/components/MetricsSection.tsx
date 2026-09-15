@@ -4,7 +4,7 @@ import { memo } from 'react';
 import { Activity, Database, HardDrive, Wifi, Cpu, Thermometer, MemoryStick } from 'lucide-react';
 import MetricCard from './MetricCard';
 import { LatestMetrics } from '@/types';
-import { formatBytes, calculatePercentage, extractMetric, getMetricColor } from '@/lib/metrics-utils';
+import { formatBytes, extractMetric, getMetricColor } from '@/lib/metrics-utils';
 
 interface MetricsSectionProps {
   metrics: LatestMetrics | null;
@@ -48,12 +48,11 @@ function MetricsSection({ metrics, loading }: MetricsSectionProps) {
     swapUsed = extractMetric(metrics.metrics, 'swap_used_bytes');
     swapTotal = extractMetric(metrics.metrics, 'swap_total_bytes');
 
-    // For display, we'll show percentages for memory since agent only sends percentage
-    memUsed = memPercent;
-    memTotal = 100;
+    memUsed = extractMetric(metrics.metrics, 'memory_used_bytes');
+    memTotal = extractMetric(metrics.metrics, 'memory_total_bytes');
 
-    networkRx = extractMetric(metrics.metrics, 'network_rx_bytes');
-    networkTx = extractMetric(metrics.metrics, 'network_tx_bytes');
+    networkRx = extractMetric(metrics.metrics, 'network_rx_bytes_per_sec') || extractMetric(metrics.metrics, 'network_rx_bytes');
+    networkTx = extractMetric(metrics.metrics, 'network_tx_bytes_per_sec') || extractMetric(metrics.metrics, 'network_tx_bytes');
     
     // Temperature metrics
     const cpuTempRaw = extractMetric(metrics.metrics, 'cpu_temp_celsius');
@@ -132,7 +131,7 @@ function MetricsSection({ metrics, loading }: MetricsSectionProps) {
               percentage={memPercent}
               color={memColor}
               icon={<Database className="w-6 h-6" />}
-              secondaryValue={memPercent < 75 ? 'Healthy' : memPercent < 90 ? 'Warning' : 'Critical'}
+              secondaryValue={memTotal > 0 ? `${formatBytes(memUsed)} / ${formatBytes(memTotal)}` : (memPercent < 75 ? 'Healthy' : memPercent < 90 ? 'Warning' : 'Critical')}
               size="md"
             />
 
@@ -148,12 +147,12 @@ function MetricsSection({ metrics, loading }: MetricsSectionProps) {
             />
 
             <MetricCard
-              label="Network Traffic"
+              label="Network throughput"
               value={formatBytes(networkRx)}
-              unit="RX"
+              unit="RX/s"
               color="blue"
               icon={<Wifi className="w-6 h-6" />}
-              secondaryValue={`TX: ${formatBytes(networkTx)}`}
+              secondaryValue={`TX: ${formatBytes(networkTx)}/s`}
               size="md"
             />
           </>

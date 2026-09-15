@@ -8,6 +8,8 @@ import {
   WsMetricMessage,
   WsMetricBatchMessage,
   WsProcessSnapshotMessage,
+  WsHostTelemetryMessage,
+  HostTelemetrySnapshot,
   WsLogMessage,
   WsAlertMessage,
   WsInitialStateMessage,
@@ -18,7 +20,12 @@ import {
 export interface MetricsWebSocketCallbacks {
   onMetric?: (message: WsMetricMessage) => void;
   onProcessSnapshot?: (message: WsProcessSnapshotMessage) => void;
-  onInitialState?: (agents: WsAgentSnapshot[], metrics: WsMetricSnapshot[]) => void;
+  onHostTelemetry?: (message: WsHostTelemetryMessage) => void;
+  onInitialState?: (
+    agents: WsAgentSnapshot[],
+    metrics: WsMetricSnapshot[],
+    hostTelemetry: HostTelemetrySnapshot[],
+  ) => void;
 }
 
 /**
@@ -70,7 +77,8 @@ export function useMetricsWebSocket(callbacks: MetricsWebSocketCallbacks | ((mes
         setInitialStateReceived(true);
         callbacksRef.current.onInitialState?.(
           (message as WsInitialStateMessage).agents,
-          (message as WsInitialStateMessage).metrics
+          (message as WsInitialStateMessage).metrics,
+          (message as WsInitialStateMessage).host_telemetry ?? [],
         );
         return;
       }
@@ -102,6 +110,11 @@ export function useMetricsWebSocket(callbacks: MetricsWebSocketCallbacks | ((mes
 
       if (message.type === "process_snapshot") {
         callbacksRef.current.onProcessSnapshot?.(message as WsProcessSnapshotMessage);
+        return;
+      }
+
+      if (message.type === "host_telemetry") {
+        callbacksRef.current.onHostTelemetry?.(message as WsHostTelemetryMessage);
       }
     });
 

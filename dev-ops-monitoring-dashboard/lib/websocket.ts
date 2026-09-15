@@ -41,6 +41,73 @@ export type WsProcessSnapshotMessage = {
   timestamp: string;
 };
 
+export type MountSnapshot = {
+  device: string;
+  mount_point: string;
+  filesystem: string;
+  used_bytes: number;
+  available_bytes: number;
+  total_bytes: number;
+  usage_percent: number;
+  inodes_used: number;
+  inodes_total: number;
+  inode_usage_percent: number;
+  read_bytes_per_sec: number;
+  write_bytes_per_sec: number;
+  read_iops: number;
+  write_iops: number;
+  average_latency_ms: number;
+};
+
+export type NetworkInterfaceSnapshot = {
+  interface: string;
+  rx_bytes_per_sec: number;
+  tx_bytes_per_sec: number;
+  rx_packets_per_sec: number;
+  tx_packets_per_sec: number;
+  rx_errors: number;
+  tx_errors: number;
+  rx_dropped: number;
+  tx_dropped: number;
+};
+
+export type ServiceSnapshot = {
+  name: string;
+  load_state: string;
+  active_state: string;
+  sub_state: string;
+  main_pid: number;
+  restart_count: number;
+  active_for_seconds: number;
+};
+
+export type ContainerSnapshot = {
+  id: string;
+  name: string;
+  image: string;
+  state: string;
+  health: string;
+  cpu_percent: number;
+  memory_bytes: number;
+  memory_limit_bytes: number;
+  memory_percent: number;
+  restart_count: number;
+  run_time_seconds: number;
+};
+
+export type HostTelemetrySnapshot = {
+  agent_id: string;
+  timestamp: string;
+  mounts: MountSnapshot[];
+  network_interfaces: NetworkInterfaceSnapshot[];
+  services: ServiceSnapshot[];
+  containers: ContainerSnapshot[];
+};
+
+export type WsHostTelemetryMessage = HostTelemetrySnapshot & {
+  type: "host_telemetry";
+};
+
 export type WsLogMessage = {
   type: "log";
   agent_id: string;
@@ -77,6 +144,7 @@ export type WsInitialStateMessage = {
   type: "initial_state";
   agents: WsAgentSnapshot[];
   metrics: WsMetricSnapshot[];
+  host_telemetry: HostTelemetrySnapshot[];
 };
 
 export type WsHistoricalMetricsMessage = {
@@ -92,6 +160,7 @@ export type WsMessage =
   | WsMetricMessage
   | WsMetricBatchMessage
   | WsProcessSnapshotMessage
+  | WsHostTelemetryMessage
   | WsLogMessage
   | WsAlertMessage
   | WsInitialStateMessage

@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh WatchTower Docker telemetry
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=10s
+AccuracySec=1s
+Persistent=true
+Unit=watchtower-docker-telemetry.service
+
+[Install]
+WantedBy=timers.target
+
