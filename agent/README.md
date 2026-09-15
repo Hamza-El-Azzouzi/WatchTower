@@ -113,16 +113,11 @@ Create an `agent.toml` configuration file:
 # Agent Configuration
 
 [agent]
-# Unique identifier for this agent (must be unique across all agents)
-id = "web-server-01"
-
-# Human-readable name
-name = "Production Web Server 1"
-
-# Agent type: "server" or "database"
-agent_type = "server"
+# Unique agent identifier and display name
+name = "web-server-01"
 
 [server]
+enabled = true
 # Central monitoring server URL
 url = "http://monitoring.example.com:8080"
 
@@ -139,13 +134,16 @@ collect_cpu = true
 collect_memory = true
 collect_disk = true
 collect_network = true
-collect_swap = true
-collect_temperature = true
-collect_gpu = true           # If GPU hardware detected
+
+# Optional process monitoring. Executable names use an exact,
+# case-insensitive match. Command lines and environments are not sent.
+[process_watch]
+enabled = true
+names = ["postgres", "nginx"]
 
 # Optional: Database monitoring
-[[databases]]
-name = "production-db"
+[database]
+enabled = true
 db_type = "postgres"  # or "mysql"
 host = "localhost"
 port = 5432
@@ -153,6 +151,10 @@ database = "myapp"
 username = "monitor_user"
 password = "secure_password"
 ```
+
+Container deployments can override the core settings with `AGENT_NAME`,
+`SERVER_URL`, `API_KEY`, `COLLECTION_INTERVAL`, `PROCESS_WATCH_ENABLED`, and a
+comma-separated `PROCESS_WATCH_NAMES` value.
 
 ---
 

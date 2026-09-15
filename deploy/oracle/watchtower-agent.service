@@ -1,0 +1,26 @@
+[Unit]
+Description=WatchTower host monitoring agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=watchtower-agent
+Group=watchtower-agent
+EnvironmentFile=/etc/watchtower/agent.env
+ExecStart=/usr/local/bin/monitor-agent
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target

@@ -10,10 +10,49 @@ use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::alerts::manager::AlertManager;
-use crate::auth::{AdminLoginRequest, AdminLoginResponse, AdminUser, AuthService, CreateApiKeyRequest};
+use crate::auth::{
+    AdminLoginRequest, AdminLoginResponse, AdminUser, AuthService, CreateApiKeyRequest,
+};
 use crate::db::Database;
 use crate::storage::{Agent, DataPoint, MetricsPayload, StorageStats, TimeSeriesStore};
 use crate::websocket::{WebSocketManager, WsMessage};
+
+const MAX_AGENT_ID_LEN: usize = 128;
+const MAX_METRICS_PER_PAYLOAD: usize = 512;
+const MAX_METRIC_NAME_LEN: usize = 128;
+
+fn validate_metrics_payload(payload: &MetricsPayload) -> Result<(), ApiError> {
+    let valid_identifier = |value: &str, max_len: usize| {
+        !value.is_empty()
+            && value.len() <= max_len
+            && value.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':')
+            })
+    };
+
+    if !valid_identifier(&payload.agent_id, MAX_AGENT_ID_LEN) {
+        return Err(ApiError::BadRequest(
+            "agent_id must be 1-128 characters using letters, numbers, '.', '_', ':' or '-'"
+                .to_string(),
+        ));
+    }
+    if payload.metrics.is_empty() || payload.metrics.len() > MAX_METRICS_PER_PAYLOAD {
+        return Err(ApiError::BadRequest(format!(
+            "metrics must contain between 1 and {MAX_METRICS_PER_PAYLOAD} entries"
+        )));
+    }
+    if payload
+        .metrics
+        .iter()
+        .any(|(name, value)| !valid_identifier(name, MAX_METRIC_NAME_LEN) || !value.is_finite())
+    {
+        return Err(ApiError::BadRequest(
+            "metric names or values contain invalid data".to_string(),
+        ));
+    }
+
+    Ok(())
+}
 
 /// Shared application state
 #[derive(Clone)]
@@ -75,6 +114,8 @@ pub async fn ingest_metrics(
     headers: HeaderMap,
     Json(payload): Json<MetricsPayload>,
 ) -> Result<impl IntoResponse, ApiError> {
+    validate_metrics_payload(&payload)?;
+
     info!(
         "Received metrics from agent '{}' with {} metrics",
         payload.agent_id,
@@ -165,6 +206,37 @@ pub async fn ingest_metrics(
             "status": "accepted"
         })),
     ))
+}
+
+#[cfg(test)]
+mod payload_validation_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn payload(agent_id: &str, metrics: HashMap<String, f64>) -> MetricsPayload {
+        MetricsPayload {
+            agent_id: agent_id.to_string(),
+            timestamp: Utc::now(),
+            metrics,
+        }
+    }
+
+    #[test]
+    fn accepts_process_metrics() {
+        let metrics = HashMap::from([("process_postgres_running".to_string(), 1.0)]);
+        assert!(validate_metrics_payload(&payload("agent-01", metrics)).is_ok());
+    }
+
+    #[test]
+    fn rejects_log_injection_and_excessive_cardinality() {
+        let metric = HashMap::from([("cpu_usage".to_string(), 1.0)]);
+        assert!(validate_metrics_payload(&payload("agent\nforged", metric)).is_err());
+
+        let too_many = (0..=MAX_METRICS_PER_PAYLOAD)
+            .map(|index| (format!("metric_{index}"), index as f64))
+            .collect();
+        assert!(validate_metrics_payload(&payload("agent-01", too_many)).is_err());
+    }
 }
 
 /// Query parameters for GET /api/v1/metrics

@@ -1,0 +1,139 @@
+stages:
+  - verify
+  - build
+  - deploy
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH'
+
+default:
+  interruptible: true
+
+variables:
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  DOCKER_TLS_CERTDIR: "/certs"
+  SERVER_IMAGE: "$CI_REGISTRY_IMAGE/server:$CI_COMMIT_SHA"
+
+.rust-cache: &rust-cache
+  key:
+    files:
+      - agent/Cargo.lock
+      - server/Cargo.lock
+  paths:
+    - .cargo/registry/index/
+    - .cargo/registry/cache/
+    - .cargo/git/db/
+  policy: pull-push
+
+agent:verify:
+  stage: verify
+  image: rust:1.92-bookworm
+  cache: *rust-cache
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq pkg-config libssl-dev clang cmake
+  script:
+    - cd agent
+    - cargo fmt --all -- --check
+    - cargo clippy --locked --all-targets -- -D warnings
+    - cargo test --locked
+
+server:verify:
+  stage: verify
+  image: rust:1.92-bookworm
+  cache: *rust-cache
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq pkg-config libssl-dev libpq-dev
+  script:
+    - cd server
+    - cargo test --locked
+
+dashboard:verify:
+  stage: verify
+  image: node:20-bookworm-slim
+  cache:
+    key:
+      files:
+        - dev-ops-monitoring-dashboard/package-lock.json
+    paths:
+      - .npm/
+  variables:
+    npm_config_cache: "$CI_PROJECT_DIR/.npm"
+  script:
+    - cd dev-ops-monitoring-dashboard
+    - npm ci --prefer-offline
+    - npm run lint
+    - npm run build
+    - npm audit --audit-level=high
+
+agent:release:
+  stage: build
+  image: rust:1.92-bookworm
+  cache: *rust-cache
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y -qq pkg-config libssl-dev clang cmake
+  script:
+    - cd agent
+    - cargo build --locked --release
+    - install -D -m 0755 target/release/monitor-agent "$CI_PROJECT_DIR/release/monitor-agent"
+  artifacts:
+    name: "watchtower-agent-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - release/monitor-agent
+    expire_in: 7 days
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+server:image:
+  stage: build
+  image: docker:27-cli
+  services:
+    - name: docker:27-dind
+      alias: docker
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login "$CI_REGISTRY" --username "$CI_REGISTRY_USER" --password-stdin
+  script:
+    - docker build --pull --tag "$SERVER_IMAGE" server
+    - docker push "$SERVER_IMAGE"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+deploy:oracle:
+  stage: deploy
+  image: alpine:3.22
+  needs:
+    - job: agent:release
+      artifacts: true
+    - job: server:image
+  resource_group: oracle-production
+  environment:
+    name: production/oracle
+    url: "https://$API_DOMAIN"
+  before_script:
+    - apk add --no-cache bash openssh-client
+    - chmod 400 "$SSH_PRIVATE_KEY"
+  script:
+    - bash deploy/oracle/ci-package.sh
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_REF_PROTECTED == "true"'
+
+deploy:vercel:
+  stage: deploy
+  image: node:20-bookworm-slim
+  needs:
+    - dashboard:verify
+  resource_group: vercel-production
+  environment:
+    name: production/vercel
+  script:
+    - npm install --global vercel@latest
+    - cd dev-ops-monitoring-dashboard
+    - vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+    - vercel build --prod --token="$VERCEL_TOKEN"
+    - vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_REF_PROTECTED == "true"'

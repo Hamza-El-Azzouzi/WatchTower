@@ -10,6 +10,7 @@ mod websocket;
 
 use anyhow::Result;
 use axum::{
+    extract::DefaultBodyLimit,
     http::{header, HeaderName, HeaderValue, Method},
     routing::{get, post},
     Router,
@@ -326,6 +327,8 @@ async fn main() -> Result<()> {
         .with_state(state)
         // Middleware
         .layer(cors)
+        // Bound request buffering even when authentication is disabled.
+        .layer(DefaultBodyLimit::max(512 * 1024))
         .layer(TraceLayer::new_for_http());
 
     let bind_addr = config.bind_address();

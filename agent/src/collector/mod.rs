@@ -4,6 +4,7 @@ pub mod gpu;
 pub mod logs;
 pub mod memory;
 pub mod network;
+pub mod process;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

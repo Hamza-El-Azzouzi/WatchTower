@@ -17,6 +17,7 @@ use collector::{
     gpu::{GpuCollector, TemperatureCollector},
     memory::MemoryCollector,
     network::NetworkCollector,
+    process::ProcessCollector,
     SystemMetrics,
 };
 use collectors::database::DatabaseCollector;
@@ -49,6 +50,7 @@ struct MetricCollectors {
     network: NetworkCollector,
     gpu: GpuCollector,
     temperature: TemperatureCollector,
+    process: ProcessCollector,
 }
 
 impl MetricCollectors {
@@ -60,6 +62,7 @@ impl MetricCollectors {
             network: NetworkCollector::new(),
             gpu: GpuCollector::new(),
             temperature: TemperatureCollector::new(),
+            process: ProcessCollector::new(),
         }
     }
 
@@ -126,6 +129,13 @@ impl MetricCollectors {
             gpu_memory_used,
             gpu_memory_total,
         }
+    }
+
+    fn collect_processes(
+        &mut self,
+        watched_names: &[String],
+    ) -> std::collections::HashMap<String, f64> {
+        self.process.collect(watched_names)
     }
 }
 
@@ -244,6 +254,10 @@ async fn run_agent(config: Config) -> Result<()> {
         if let Some(ref sender) = sender {
             let mut metrics_map = metrics.to_metrics_map();
 
+            if config.process_watch.enabled {
+                metrics_map.extend(collectors.collect_processes(&config.process_watch.names));
+            }
+
             // Collect database metrics if database collector is enabled
             if let Some(ref db_collector) = db_collector {
                 match db_collector.collect().await {
@@ -329,6 +343,8 @@ async fn main() -> Result<()> {
         info!("No configuration file specified, using defaults");
         Config::default()
     };
+
+    config.apply_env_overrides();
 
     // Override interval if provided via CLI
     if let Some(interval) = args.interval {

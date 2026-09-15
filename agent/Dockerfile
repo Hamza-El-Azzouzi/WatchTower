@@ -35,9 +35,12 @@ ENV AGENT_ID=docker-agent
 ENV AGENT_NAME=docker-agent
 ENV SERVER_URL=http://host.docker.internal:8080
 ENV COLLECTION_INTERVAL=15
+ENV PROCESS_WATCH_ENABLED=false
+ENV PROCESS_WATCH_NAMES=""
 
 # Volume for configuration
 VOLUME ["/etc/monitor-agent"]
 
-# Run the agent
-CMD ["monitor-agent", "-c", "/etc/monitor-agent/agent.toml"]
+# Run from environment defaults. Mount a config and override the command with
+# `monitor-agent -c /etc/monitor-agent/agent.toml` when file-based config is desired.
+CMD ["monitor-agent"]

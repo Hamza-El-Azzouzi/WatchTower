@@ -43,10 +43,7 @@ impl MetricsSender {
     }
 
     pub async fn send_metrics(&self, payload: &MetricsPayload) -> Result<()> {
-        let endpoint = format!(
-            "{}/api/v1/metrics?agent_id={}",
-            self.server_url, payload.agent_id
-        );
+        let endpoint = format!("{}/api/v1/metrics", self.server_url.trim_end_matches('/'));
         let mut last_error = None;
 
         for attempt in 1..=self.retry_attempts {
@@ -55,7 +52,11 @@ impl MetricsSender {
                 endpoint, attempt, self.retry_attempts
             );
 
-            let mut request = self.client.post(&endpoint).json(payload);
+            let mut request = self
+                .client
+                .post(&endpoint)
+                .query(&[("agent_id", payload.agent_id.as_str())])
+                .json(payload);
 
             // Add Authorization header if API key is provided
             if let Some(ref api_key) = self.api_key {

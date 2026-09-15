@@ -10,6 +10,12 @@ collect_memory = true
 collect_disk = true
 collect_network = true
 
+# Opt-in process watch. Names are matched exactly (case-insensitive); command
+# lines and environment variables are never collected.
+[process_watch]
+enabled = false
+names = ["postgres", "nginx"]
+
 [server]
 enabled = true
 url = "http://10.1.17.1:8080"

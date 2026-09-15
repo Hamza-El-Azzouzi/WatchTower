@@ -40,7 +40,8 @@ Administrators must generate replacement keys after upgrading.
 
 ## 4. Deeper Monitoring
 
-- [ ] Process and service monitoring
+- [x] Configurable process monitoring (running state, instances, CPU, and memory)
+- [ ] Service-manager monitoring (systemd/launchd/Windows services)
 - [ ] Container monitoring
 - [ ] Per-mount disk metrics
 - [ ] Per-interface network rates

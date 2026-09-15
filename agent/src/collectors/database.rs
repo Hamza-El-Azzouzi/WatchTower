@@ -92,7 +92,7 @@ impl DatabaseCollector {
 
     #[cfg(feature = "postgres")]
     async fn collect_postgres(&self) -> Result<DatabaseMetrics> {
-        use tokio_postgres::{Client, NoTls};
+        use tokio_postgres::NoTls;
 
         let conn_string = format!(
             "host={} port={} dbname={} user={} password={}",
@@ -229,7 +229,7 @@ impl DatabaseCollector {
     #[cfg(feature = "mysql")]
     async fn collect_mysql(&self) -> Result<DatabaseMetrics> {
         use mysql_async::prelude::*;
-        use mysql_async::{OptsBuilder, Pool};
+        use mysql_async::{params, OptsBuilder, Pool};
 
         let opts = OptsBuilder::default()
             .ip_or_hostname(self.config.host.clone())
@@ -242,24 +242,30 @@ impl DatabaseCollector {
         let mut conn = pool.get_conn().await?;
 
         // Get connection stats
-        let status: HashMap<String, String> = conn
+        let status_rows: Vec<(String, String)> = conn
             .query("SHOW STATUS WHERE Variable_name IN ('Threads_connected', 'Max_used_connections', 'Slow_queries', 'Com_commit', 'Com_rollback')")
             .await?;
+        let status: HashMap<String, String> = status_rows.into_iter().collect();
 
         // Get max connections
-        let max_conn: u32 = conn
-            .query_first("SHOW VARIABLES LIKE 'max_connections'")
+        let max_conn = conn
+            .query_first::<(String, String), _>("SHOW VARIABLES LIKE 'max_connections'")
             .await?
+            .and_then(|(_, value)| value.parse::<u32>().ok())
             .unwrap_or(100);
 
-        // Get database size
+        // Parameterization prevents configuration values from becoming SQL.
         let db_size: u64 = conn
-            .query_first(&format!(
-                "SELECT SUM(data_length + index_length) as size FROM information_schema.TABLES WHERE table_schema = '{}'",
-                self.config.database
-            ))
+            .exec_first::<Option<u64>, _, _>(
+                "SELECT SUM(data_length + index_length) FROM information_schema.TABLES WHERE table_schema = :schema",
+                params! { "schema" => self.config.database.clone() },
+            )
             .await?
+            .flatten()
             .unwrap_or(0);
+
+        conn.disconnect().await?;
+        pool.disconnect().await?;
 
         Ok(DatabaseMetrics {
             connections_active: status
@@ -273,7 +279,7 @@ impl DatabaseCollector {
                 .get("Slow_queries")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
-            cache_hit_ratio: 0.0, // Would need to calculate from Qcache stats
+            cache_hit_ratio: 0.0, // Would need to calculate from buffer-pool stats
             transactions_committed: status
                 .get("Com_commit")
                 .and_then(|v| v.parse().ok())
@@ -283,7 +289,7 @@ impl DatabaseCollector {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0),
             database_size_bytes: db_size,
-            locks_waiting: 0, // Would need to query information_schema.innodb_locks
+            locks_waiting: 0, // Requires performance_schema lock instrumentation
         })
     }
 
