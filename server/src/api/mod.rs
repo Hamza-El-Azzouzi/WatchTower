@@ -20,6 +20,11 @@ use crate::websocket::{WebSocketManager, WsMessage};
 const MAX_AGENT_ID_LEN: usize = 128;
 const MAX_METRICS_PER_PAYLOAD: usize = 512;
 const MAX_METRIC_NAME_LEN: usize = 128;
+const MAX_PROCESSES_PER_PAYLOAD: usize = 256;
+const MAX_PROCESS_TEXT_LEN: usize = 96;
+const MAX_LOGS_PER_PAYLOAD: usize = 500;
+const MAX_LOG_SOURCE_LEN: usize = 512;
+const MAX_LOG_MESSAGE_LEN: usize = 16_384;
 
 fn validate_metrics_payload(payload: &MetricsPayload) -> Result<(), ApiError> {
     let valid_identifier = |value: &str, max_len: usize| {
@@ -50,7 +55,53 @@ fn validate_metrics_payload(payload: &MetricsPayload) -> Result<(), ApiError> {
             "metric names or values contain invalid data".to_string(),
         ));
     }
+    if payload.processes.len() > MAX_PROCESSES_PER_PAYLOAD
+        || payload.processes.iter().any(|process| {
+            process.command.is_empty()
+                || process.command.len() > MAX_PROCESS_TEXT_LEN
+                || process.user.len() > MAX_PROCESS_TEXT_LEN
+                || process.state.len() > 24
+                || !process.cpu_percent.is_finite()
+                || process.cpu_percent < 0.0
+                || process.cpu_percent > 100_000.0
+                || process.command.chars().any(char::is_control)
+                || process.user.chars().any(char::is_control)
+                || process.state.chars().any(char::is_control)
+        })
+    {
+        return Err(ApiError::BadRequest(
+            "process snapshot is too large or contains invalid data".to_string(),
+        ));
+    }
 
+    Ok(())
+}
+
+fn validate_logs_payload(payload: &crate::storage::LogsPayload) -> Result<(), ApiError> {
+    if payload.agent_id.is_empty()
+        || payload.agent_id.len() > MAX_AGENT_ID_LEN
+        || payload.agent_id.chars().any(|character| {
+            !(character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':'))
+        })
+    {
+        return Err(ApiError::BadRequest("invalid log agent_id".to_string()));
+    }
+    if payload.logs.is_empty() || payload.logs.len() > MAX_LOGS_PER_PAYLOAD {
+        return Err(ApiError::BadRequest(format!(
+            "logs must contain between 1 and {MAX_LOGS_PER_PAYLOAD} entries"
+        )));
+    }
+    if payload.logs.iter().any(|log| {
+        log.source.len() > MAX_LOG_SOURCE_LEN
+            || log.message.is_empty()
+            || log.message.len() > MAX_LOG_MESSAGE_LEN
+            || log.source.chars().any(|character| character == '\0')
+            || log.message.chars().any(|character| character == '\0')
+    }) {
+        return Err(ApiError::BadRequest(
+            "log source or message is invalid or too large".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -199,6 +250,15 @@ pub async fn ingest_metrics(
             timestamp: payload.timestamp,
         });
     }
+    if !payload.processes.is_empty() {
+        state
+            .ws_manager
+            .broadcast_metric(WsMessage::ProcessSnapshot {
+                agent_id: payload.agent_id.clone(),
+                processes: payload.processes.clone(),
+                timestamp: payload.timestamp,
+            });
+    }
 
     Ok((
         StatusCode::ACCEPTED,
@@ -218,6 +278,7 @@ mod payload_validation_tests {
             agent_id: agent_id.to_string(),
             timestamp: Utc::now(),
             metrics,
+            processes: Vec::new(),
         }
     }
 
@@ -468,6 +529,7 @@ pub async fn ingest_logs(
     headers: HeaderMap,
     Json(payload): Json<crate::storage::LogsPayload>,
 ) -> Result<impl IntoResponse, ApiError> {
+    validate_logs_payload(&payload)?;
     info!(
         "Received {} logs from agent '{}'",
         payload.logs.len(),
@@ -484,7 +546,9 @@ pub async fn ingest_logs(
         .validate_api_key_with_agent(api_key, Some(&payload.agent_id))
         .await
         .map_err(|_| ApiError::InternalError("Authentication service error".to_string()))?
-        .ok_or_else(|| ApiError::Forbidden("Agent ID is unavailable to this API key".to_string()))?;
+        .ok_or_else(|| {
+            ApiError::Forbidden("Agent ID is unavailable to this API key".to_string())
+        })?;
 
     // Store logs in-memory for fast queries
     state.store.insert_logs(payload.clone());
@@ -590,25 +654,58 @@ pub async fn query_logs(
             .as_ref()
             .is_some_and(|allowed| !allowed.iter().any(|id| id == agent_id))
         {
-            return Err(ApiError::Forbidden("Agent is not owned by this tenant".to_string()));
+            return Err(ApiError::Forbidden(
+                "Agent is not owned by this tenant".to_string(),
+            ));
         }
     }
 
-    let logs = state.store.query_logs(
+    let limit = params.limit.unwrap_or(100).clamp(1, 1000);
+    let memory_logs = state.store.query_logs(
         allowed_agent_ids.as_deref(),
         params.agent_id.as_deref(),
-        level,
+        level.clone(),
         params.from,
         params.to,
         params.keyword.as_deref(),
-        params.limit,
+        Some(limit),
     );
 
-    let count = logs.len();
-    let total_count = allowed_agent_ids.as_ref().map_or_else(
+    let memory_total = allowed_agent_ids.as_ref().map_or_else(
         || state.store.get_log_count(),
         |allowed| state.store.get_log_count_for_agents(allowed),
     );
+
+    let (logs, total_count) = if let Some(database) = &state.database {
+        let level_string = level.as_ref().map(ToString::to_string);
+        match database
+            .query_logs(
+                allowed_agent_ids.as_deref(),
+                params.agent_id.as_deref(),
+                level_string.as_deref(),
+                params.from,
+                params.to,
+                params.keyword.as_deref(),
+                limit,
+            )
+            .await
+        {
+            Ok(logs) => {
+                let total = database
+                    .get_log_count(allowed_agent_ids.as_deref())
+                    .await
+                    .unwrap_or(memory_total);
+                (logs, total)
+            }
+            Err(error) => {
+                tracing::warn!("Failed to query durable logs: {}", error);
+                (memory_logs, memory_total)
+            }
+        }
+    } else {
+        (memory_logs, memory_total)
+    };
+    let count = logs.len();
 
     Ok(Json(LogsResponse {
         logs,
@@ -1276,20 +1373,21 @@ async fn ensure_agent_access(
             if database
                 .agent_belongs_to_api_key(agent_id, key_id)
                 .await
-                .map_err(|_| ApiError::InternalError("Failed to verify agent ownership".to_string()))?
+                .map_err(|_| {
+                    ApiError::InternalError("Failed to verify agent ownership".to_string())
+                })?
             {
                 Ok(())
             } else {
-                Err(ApiError::Forbidden("Agent is not owned by this tenant".to_string()))
+                Err(ApiError::Forbidden(
+                    "Agent is not owned by this tenant".to_string(),
+                ))
             }
         }
     }
 }
 
-async fn require_admin(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<AdminUser, ApiError> {
+async fn require_admin(state: &AppState, headers: &HeaderMap) -> Result<AdminUser, ApiError> {
     let token = extract_admin_token(headers)
         .ok_or_else(|| ApiError::Unauthorized("Missing admin token".to_string()))?;
     let auth_service = state

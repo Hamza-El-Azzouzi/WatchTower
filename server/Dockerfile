@@ -1,6 +1,6 @@
 # Multi-stage build for DevOps Monitoring Server
 # Stage 1: Build the Rust application
-FROM rust:latest AS builder
+FROM rust:1.92-bookworm AS builder
 
 # Install build dependencies (including PostgreSQL client libraries)
 RUN apt-get update && apt-get install -y \

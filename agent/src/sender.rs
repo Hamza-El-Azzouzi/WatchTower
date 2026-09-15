@@ -6,11 +6,15 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tracing::{debug, error, warn};
 
+use crate::collector::process::ProcessSnapshot;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsPayload {
     pub agent_id: String,
     pub timestamp: DateTime<Utc>,
     pub metrics: HashMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub processes: Vec<ProcessSnapshot>,
 }
 
 pub struct MetricsSender {

@@ -1,0 +1,28 @@
+FROM ubuntu:22.04 AS builder
+
+ARG RUST_TOOLCHAIN=1.92.0
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        libssl-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -fsS https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain "${RUST_TOOLCHAIN}" \
+    && rm /tmp/rustup-init.sh
+
+ENV PATH=/root/.cargo/bin:${PATH}
+WORKDIR /build
+
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+
+RUN cargo build --locked --release \
+    && strip target/release/monitor-agent
+
+FROM scratch AS export
+COPY --from=builder /build/target/release/monitor-agent /monitor-agent

@@ -134,8 +134,11 @@ impl MetricCollectors {
     fn collect_processes(
         &mut self,
         watched_names: &[String],
-    ) -> std::collections::HashMap<String, f64> {
-        self.process.collect(watched_names)
+    ) -> (
+        std::collections::HashMap<String, f64>,
+        Vec<collector::process::ProcessSnapshot>,
+    ) {
+        self.process.collect(watched_names, 256)
     }
 }
 
@@ -185,6 +188,7 @@ async fn run_agent(config: Config) -> Result<()> {
                 config.agent.name.clone(),
                 logs_config.paths.clone(),
                 logs_config.batch_size,
+                logs_config.batch_interval_seconds,
             ) {
                 Ok(collector) => Some(collector),
                 Err(e) => {
@@ -253,9 +257,13 @@ async fn run_agent(config: Config) -> Result<()> {
         // Send metrics to server if enabled
         if let Some(ref sender) = sender {
             let mut metrics_map = metrics.to_metrics_map();
+            let mut process_snapshot = Vec::new();
 
             if config.process_watch.enabled {
-                metrics_map.extend(collectors.collect_processes(&config.process_watch.names));
+                let (process_metrics, processes) =
+                    collectors.collect_processes(&config.process_watch.names);
+                metrics_map.extend(process_metrics);
+                process_snapshot = processes;
             }
 
             // Collect database metrics if database collector is enabled
@@ -277,6 +285,7 @@ async fn run_agent(config: Config) -> Result<()> {
                 agent_id: config.agent.name.clone(),
                 timestamp: chrono::Utc::now(),
                 metrics: metrics_map,
+                processes: process_snapshot,
             };
 
             if let Err(e) = sender.send_metrics(&payload).await {
@@ -302,6 +311,7 @@ async fn run_agent(config: Config) -> Result<()> {
                         if let Err(e) = sender.send_logs(&logs_payload).await {
                             warn!("Failed to send {} logs to server: {}", log_count, e);
                         } else {
+                            log_collector.mark_sent(log_count);
                             debug!("Sent {} logs to server", log_count);
                         }
                     }

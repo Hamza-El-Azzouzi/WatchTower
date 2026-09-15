@@ -7,6 +7,7 @@ Wants=network-online.target
 Type=simple
 User=watchtower-agent
 Group=watchtower-agent
+SupplementaryGroups=adm
 EnvironmentFile=/etc/watchtower/agent.env
 ExecStart=/usr/local/bin/monitor-agent
 Restart=always

@@ -17,7 +17,7 @@ struct Claims {
 fn jwt_secret() -> Result<String> {
     let secret = std::env::var("ADMIN_JWT_SECRET")
         .context("ADMIN_JWT_SECRET must be set when authentication is enabled")?;
-    if secret.as_bytes().len() < 32 {
+    if secret.len() < 32 {
         bail!("ADMIN_JWT_SECRET must contain at least 32 bytes");
     }
     Ok(secret)

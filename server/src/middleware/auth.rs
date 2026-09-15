@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::auth::AuthService;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum AuthenticatedPrincipal {
     Admin { username: String },
     ApiKey { key_id: i64 },
@@ -48,9 +49,11 @@ pub async fn auth_middleware(
     // First check for admin token via X-Admin-Token header
     if let Some(admin_token) = extract_admin_token(&headers) {
         if let Ok(Some(admin)) = auth_service.validate_admin_token(&admin_token).await {
-            request.extensions_mut().insert(AuthenticatedPrincipal::Admin {
-                username: admin.username,
-            });
+            request
+                .extensions_mut()
+                .insert(AuthenticatedPrincipal::Admin {
+                    username: admin.username,
+                });
             return Ok(next.run(request).await);
         }
     }
@@ -58,9 +61,11 @@ pub async fn auth_middleware(
     // Also check for admin token via Authorization: Bearer header
     if let Some(bearer_token) = extract_api_key(&headers) {
         if let Ok(Some(admin)) = auth_service.validate_admin_token(&bearer_token).await {
-            request.extensions_mut().insert(AuthenticatedPrincipal::Admin {
-                username: admin.username,
-            });
+            request
+                .extensions_mut()
+                .insert(AuthenticatedPrincipal::Admin {
+                    username: admin.username,
+                });
             return Ok(next.run(request).await);
         }
     }

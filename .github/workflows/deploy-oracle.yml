@@ -1,0 +1,138 @@
+name: Deploy server and agent to Oracle
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: oracle-production
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Verify backend and agent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.92.0"
+      - name: Test server
+        run: cargo test --locked --manifest-path server/Cargo.toml
+      - name: Test agent
+        run: cargo test --locked --manifest-path agent/Cargo.toml
+
+  publish-server:
+    name: Publish server image
+    needs: verify
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Resolve image name
+        id: image
+        shell: bash
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "value=ghcr.io/${owner}/watchtower-server:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish immutable server image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          platforms: ${{ vars.ORACLE_PLATFORM || 'linux/amd64' }}
+          push: true
+          tags: ${{ steps.image.outputs.value }}
+          cache-from: type=gha,scope=oracle-server
+          cache-to: type=gha,mode=max,scope=oracle-server
+
+  build-agent:
+    name: Build native agent
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build agent for the Oracle architecture
+        uses: docker/build-push-action@v6
+        with:
+          context: ./agent
+          file: ./agent/Dockerfile.release
+          target: export
+          platforms: ${{ vars.ORACLE_PLATFORM || 'linux/amd64' }}
+          outputs: type=local,dest=release
+          cache-from: type=gha,scope=oracle-agent
+          cache-to: type=gha,mode=max,scope=oracle-agent
+      - name: Verify release artifact
+        run: test -s release/monitor-agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oracle-monitor-agent
+          path: release/monitor-agent
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Deploy production
+    needs: [publish-server, build-agent]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://${{ vars.API_DOMAIN }}
+    env:
+      SERVER_IMAGE: ${{ needs.publish-server.outputs.image }}
+      CI_REGISTRY: ghcr.io
+      CI_REGISTRY_USER: ${{ github.actor }}
+      CI_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      CI_COMMIT_SHA: ${{ github.sha }}
+      ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+      ORACLE_USER: ${{ secrets.ORACLE_USER }}
+      API_DOMAIN: ${{ vars.API_DOMAIN }}
+      DASHBOARD_ORIGIN: ${{ vars.DASHBOARD_ORIGIN }}
+      POSTGRES_DB: ${{ vars.POSTGRES_DB || 'monitoring' }}
+      POSTGRES_USER: ${{ vars.POSTGRES_USER || 'monitoring_user' }}
+      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      ADMIN_JWT_SECRET: ${{ secrets.ADMIN_JWT_SECRET }}
+      BOOTSTRAP_ADMIN_USERNAME: ${{ vars.BOOTSTRAP_ADMIN_USERNAME || 'admin' }}
+      BOOTSTRAP_ADMIN_PASSWORD: ${{ secrets.BOOTSTRAP_ADMIN_PASSWORD }}
+      ORACLE_AGENT_API_KEY: ${{ secrets.ORACLE_AGENT_API_KEY }}
+      ORACLE_AGENT_NAME: ${{ vars.ORACLE_AGENT_NAME || 'oracle-production' }}
+      PROCESS_WATCH_NAMES: ${{ vars.PROCESS_WATCH_NAMES || 'monitor-server,postgres,dockerd,caddy' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: oracle-monitor-agent
+          path: release
+      - name: Prepare pinned SSH credentials
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY_VALUE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS_VALUE: ${{ secrets.ORACLE_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 0600 /dev/null "$RUNNER_TEMP/oracle-key"
+          printf '%s\n' "$SSH_PRIVATE_KEY_VALUE" > "$RUNNER_TEMP/oracle-key"
+          install -m 0600 /dev/null "$RUNNER_TEMP/oracle-known-hosts"
+          printf '%s\n' "$SSH_KNOWN_HOSTS_VALUE" > "$RUNNER_TEMP/oracle-known-hosts"
+      - name: Deploy with health check and rollback
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ runner.temp }}/oracle-key
+          SSH_KNOWN_HOSTS: ${{ runner.temp }}/oracle-known-hosts
+        run: bash deploy/oracle/ci-package.sh

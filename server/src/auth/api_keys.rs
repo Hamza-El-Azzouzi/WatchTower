@@ -125,8 +125,8 @@ impl AuthService {
             return Ok(());
         }
 
-        let username = std::env::var("BOOTSTRAP_ADMIN_USERNAME")
-            .unwrap_or_else(|_| "admin".to_string());
+        let username =
+            std::env::var("BOOTSTRAP_ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_string());
         let password = std::env::var("BOOTSTRAP_ADMIN_PASSWORD").map_err(|_| {
             anyhow::anyhow!(
                 "No active administrator exists; set BOOTSTRAP_ADMIN_PASSWORD for first startup"
@@ -300,10 +300,16 @@ impl AuthService {
                 if let Some(aid) = agent_id {
                     // Agent IDs are tenant-owned. A valid key must not be able to
                     // overwrite data for an ID already registered by another key.
-                    let existing_owner = sqlx::query("SELECT api_key_id FROM agents WHERE id = $1")
-                        .bind(aid)
-                        .fetch_optional(&self.pool)
-                        .await?;
+                    // Cast explicitly so deployments created with the legacy
+                    // INTEGER foreign-key column cannot panic while decoding
+                    // the BIGSERIAL api_keys.id as i64. The forward migration
+                    // aligns the stored column type permanently.
+                    let existing_owner = sqlx::query(
+                        "SELECT api_key_id::BIGINT AS api_key_id FROM agents WHERE id = $1",
+                    )
+                    .bind(aid)
+                    .fetch_optional(&self.pool)
+                    .await?;
                     if let Some(row) = existing_owner {
                         let owner: Option<i64> = row.get("api_key_id");
                         if owner.is_some_and(|owner_id| owner_id != key_id) {

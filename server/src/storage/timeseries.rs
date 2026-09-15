@@ -68,6 +68,25 @@ pub struct MetricsPayload {
     pub agent_id: String,
     pub timestamp: DateTime<Utc>,
     pub metrics: HashMap<String, f64>,
+    #[serde(default)]
+    pub processes: Vec<ProcessSnapshot>,
+}
+
+/// Bounded, privacy-aware process data supplied by an authenticated agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessSnapshot {
+    pub pid: u32,
+    pub parent_pid: Option<u32>,
+    pub user: String,
+    pub state: String,
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
+    pub virtual_memory_bytes: u64,
+    pub disk_read_bytes: u64,
+    pub disk_written_bytes: u64,
+    pub run_time_seconds: u64,
+    /// Executable name only; command-line arguments are never accepted.
+    pub command: String,
 }
 
 /// Information about a registered agent
@@ -348,6 +367,7 @@ impl TimeSeriesStore {
     }
 
     /// Query logs with filters
+    #[allow(clippy::too_many_arguments)]
     pub fn query_logs(
         &self,
         allowed_agent_ids: Option<&[String]>,

@@ -94,16 +94,16 @@ impl DatabaseCollector {
     async fn collect_postgres(&self) -> Result<DatabaseMetrics> {
         use tokio_postgres::NoTls;
 
-        let conn_string = format!(
-            "host={} port={} dbname={} user={} password={}",
-            self.config.host,
-            self.config.port,
-            self.config.database,
-            self.config.username,
-            self.config.password
-        );
+        let mut connection_config = tokio_postgres::Config::new();
+        connection_config
+            .host(&self.config.host)
+            .port(self.config.port)
+            .dbname(&self.config.database)
+            .user(&self.config.username)
+            .password(&self.config.password);
 
-        let (client, connection) = tokio_postgres::connect(&conn_string, NoTls)
+        let (client, connection) = connection_config
+            .connect(NoTls)
             .await
             .context("Failed to connect to PostgreSQL")?;
 

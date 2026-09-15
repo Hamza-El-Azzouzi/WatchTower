@@ -539,6 +539,74 @@ impl Database {
         Ok(())
     }
 
+    /// Query durable logs. Optional tenant IDs keep API-key users isolated.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn query_logs(
+        &self,
+        allowed_agent_ids: Option<&[String]>,
+        agent_id: Option<&str>,
+        level: Option<&str>,
+        from: Option<DateTime<Utc>>,
+        to: Option<DateTime<Utc>>,
+        keyword: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<crate::storage::LogEntry>> {
+        let allowed = allowed_agent_ids.map(|ids| ids.to_vec());
+        let rows = sqlx::query(
+            "SELECT id, agent_id, timestamp, level, COALESCE(source, '') AS source, message
+             FROM logs
+             WHERE ($1::text[] IS NULL OR agent_id = ANY($1))
+               AND ($2::text IS NULL OR agent_id = $2)
+               AND ($3::text IS NULL OR level = $3)
+               AND ($4::timestamptz IS NULL OR timestamp >= $4)
+               AND ($5::timestamptz IS NULL OR timestamp <= $5)
+               AND ($6::text IS NULL OR message ILIKE ('%' || $6 || '%'))
+             ORDER BY timestamp DESC
+             LIMIT $7",
+        )
+        .bind(allowed)
+        .bind(agent_id)
+        .bind(level)
+        .bind(from)
+        .bind(to)
+        .bind(keyword)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let level = match row.get::<String, _>("level").as_str() {
+                    "DEBUG" => crate::storage::LogLevel::DEBUG,
+                    "WARN" => crate::storage::LogLevel::WARN,
+                    "ERROR" => crate::storage::LogLevel::ERROR,
+                    "FATAL" => crate::storage::LogLevel::FATAL,
+                    _ => crate::storage::LogLevel::INFO,
+                };
+                crate::storage::LogEntry {
+                    id: row.get::<i64, _>("id") as u64,
+                    agent_id: row.get("agent_id"),
+                    timestamp: row.get("timestamp"),
+                    level,
+                    source: row.get("source"),
+                    message: row.get("message"),
+                }
+            })
+            .collect())
+    }
+
+    pub async fn get_log_count(&self, allowed_agent_ids: Option<&[String]>) -> Result<usize> {
+        let allowed = allowed_agent_ids.map(|ids| ids.to_vec());
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM logs WHERE ($1::text[] IS NULL OR agent_id = ANY($1))",
+        )
+        .bind(allowed)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count.max(0) as usize)
+    }
+
     // ============ Alert Rules CRUD ============
 
     /// Create a new alert rule in the database

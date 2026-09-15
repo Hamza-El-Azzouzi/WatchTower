@@ -81,6 +81,17 @@ if [[ -n "$AGENT_API_KEY" ]]; then
     printf 'COLLECTION_INTERVAL=15\n'
     printf 'PROCESS_WATCH_ENABLED=true\n'
     printf 'PROCESS_WATCH_NAMES=%s\n' "$PROCESS_WATCH_NAMES"
+    printf 'DB_MONITOR_ENABLED=true\n'
+    printf 'DB_MONITOR_TYPE=postgres\n'
+    printf 'DB_MONITOR_HOST=127.0.0.1\n'
+    printf 'DB_MONITOR_PORT=5432\n'
+    printf 'DB_MONITOR_DATABASE=%s\n' "$POSTGRES_DB"
+    printf 'DB_MONITOR_USERNAME=%s\n' "$POSTGRES_USER"
+    printf 'DB_MONITOR_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+    printf 'LOG_COLLECTION_ENABLED=true\n'
+    printf 'LOG_PATHS=/var/log/syslog,/var/log/auth.log\n'
+    printf 'LOG_BATCH_SIZE=100\n'
+    printf 'LOG_BATCH_INTERVAL_SECONDS=5\n'
   } > /etc/watchtower/agent.env
   chmod 0600 /etc/watchtower/agent.env
   systemctl daemon-reload

@@ -25,7 +25,7 @@ impl TestServer {
 
         // Start server as background process
         let process = Command::new("cargo")
-            .args(&["run", "--bin", "monitor-server"])
+            .args(["run", "--bin", "monitor-server"])
             .env("DATABASE_PATH", db_path.to_str().unwrap())
             .env("SERVER_HOST", "127.0.0.1")
             .env("SERVER_PORT", port.to_string())
@@ -61,7 +61,7 @@ async fn test_health_check() {
 
     let client = reqwest::Client::new();
     let response = client
-        .get(&server.url("/health"))
+        .get(server.url("/health"))
         .send()
         .await
         .expect("Failed to send request");
@@ -87,7 +87,7 @@ async fn test_metrics_ingestion() {
     });
 
     let response = client
-        .post(&server.url("/api/metrics"))
+        .post(server.url("/api/metrics"))
         .json(&metric)
         .send()
         .await

@@ -1,23 +1,51 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use sysinfo::{ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{ProcessRefreshKind, RefreshKind, System, UpdateKind, Users};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProcessSnapshot {
+    pub pid: u32,
+    pub parent_pid: Option<u32>,
+    pub user: String,
+    pub state: String,
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
+    pub virtual_memory_bytes: u64,
+    pub disk_read_bytes: u64,
+    pub disk_written_bytes: u64,
+    pub run_time_seconds: u64,
+    /// Executable name only. Command-line arguments are intentionally excluded.
+    pub command: String,
+}
 
 /// Collects aggregate metrics for an explicit allow-list of executable names.
 /// Restricting collection avoids leaking arbitrary command lines or environment data.
 pub struct ProcessCollector {
     system: System,
+    users: Users,
 }
 
 impl ProcessCollector {
     pub fn new() -> Self {
         Self {
             system: System::new_with_specifics(
-                RefreshKind::new()
-                    .with_processes(ProcessRefreshKind::new().with_cpu().with_memory()),
+                RefreshKind::new().with_processes(
+                    ProcessRefreshKind::new()
+                        .with_cpu()
+                        .with_memory()
+                        .with_disk_usage()
+                        .with_user(UpdateKind::OnlyIfNotSet),
+                ),
             ),
+            users: Users::new_with_refreshed_list(),
         }
     }
 
-    pub fn collect(&mut self, watched_names: &[String]) -> HashMap<String, f64> {
+    pub fn collect(
+        &mut self,
+        watched_names: &[String],
+        process_limit: usize,
+    ) -> (HashMap<String, f64>, Vec<ProcessSnapshot>) {
         self.system.refresh_processes();
 
         let mut metrics = HashMap::new();
@@ -60,7 +88,42 @@ impl ProcessCollector {
             metrics.insert(format!("process_{key}_memory_bytes"), memory_bytes as f64);
         }
 
-        metrics
+        let mut processes: Vec<_> = self
+            .system
+            .processes()
+            .iter()
+            .map(|(pid, process)| {
+                let disk = process.disk_usage();
+                ProcessSnapshot {
+                    pid: pid.as_u32(),
+                    parent_pid: process.parent().map(|pid| pid.as_u32()),
+                    user: process
+                        .user_id()
+                        .and_then(|user_id| self.users.get_user_by_id(user_id))
+                        .map(|user| user.name().to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    state: format!("{:?}", process.status()).to_lowercase(),
+                    cpu_percent: process.cpu_usage(),
+                    memory_bytes: process.memory(),
+                    virtual_memory_bytes: process.virtual_memory(),
+                    disk_read_bytes: disk.read_bytes,
+                    disk_written_bytes: disk.written_bytes,
+                    run_time_seconds: process.run_time(),
+                    command: process.name().chars().take(96).collect(),
+                }
+            })
+            .collect();
+
+        processes.sort_by(|left, right| {
+            right
+                .cpu_percent
+                .total_cmp(&left.cpu_percent)
+                .then_with(|| right.memory_bytes.cmp(&left.memory_bytes))
+                .then_with(|| left.pid.cmp(&right.pid))
+        });
+        processes.truncate(process_limit.min(256));
+
+        (metrics, processes)
     }
 }
 

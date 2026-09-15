@@ -197,6 +197,87 @@ impl Config {
                 .map(str::to_string)
                 .collect();
         }
+
+        if let Some(enabled) = env_bool("DB_MONITOR_ENABLED") {
+            if enabled {
+                let mut database = self.database.take().unwrap_or_else(|| DatabaseConfig {
+                    enabled: true,
+                    db_type: "postgres".to_string(),
+                    host: "127.0.0.1".to_string(),
+                    port: 5432,
+                    database: "postgres".to_string(),
+                    username: "postgres".to_string(),
+                    password: String::new(),
+                });
+                database.enabled = true;
+                set_nonempty_env("DB_MONITOR_TYPE", &mut database.db_type);
+                set_nonempty_env("DB_MONITOR_HOST", &mut database.host);
+                set_nonempty_env("DB_MONITOR_DATABASE", &mut database.database);
+                set_nonempty_env("DB_MONITOR_USERNAME", &mut database.username);
+                set_nonempty_env("DB_MONITOR_PASSWORD", &mut database.password);
+                if let Ok(port) = std::env::var("DB_MONITOR_PORT") {
+                    if let Ok(port) = port.parse::<u16>() {
+                        if port > 0 {
+                            database.port = port;
+                        }
+                    }
+                }
+                self.database = Some(database);
+            } else if let Some(database) = self.database.as_mut() {
+                database.enabled = false;
+            }
+        }
+
+        if let Some(enabled) = env_bool("LOG_COLLECTION_ENABLED") {
+            if enabled {
+                let mut logs = self.logs.take().unwrap_or_else(|| LogsConfig {
+                    enabled: true,
+                    paths: Vec::new(),
+                    batch_size: default_batch_size(),
+                    batch_interval_seconds: default_batch_interval(),
+                });
+                logs.enabled = true;
+                if let Ok(paths) = std::env::var("LOG_PATHS") {
+                    logs.paths = paths
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|path| !path.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                }
+                if let Ok(size) = std::env::var("LOG_BATCH_SIZE") {
+                    if let Ok(size) = size.parse::<usize>() {
+                        if size > 0 {
+                            logs.batch_size = size;
+                        }
+                    }
+                }
+                if let Ok(interval) = std::env::var("LOG_BATCH_INTERVAL_SECONDS") {
+                    if let Ok(interval) = interval.parse::<u64>() {
+                        if interval > 0 {
+                            logs.batch_interval_seconds = interval;
+                        }
+                    }
+                }
+                self.logs = Some(logs);
+            } else if let Some(logs) = self.logs.as_mut() {
+                logs.enabled = false;
+            }
+        }
+    }
+}
+
+fn env_bool(name: &str) -> Option<bool> {
+    std::env::var(name).ok().map(|value| {
+        value.eq_ignore_ascii_case("true") || value == "1" || value.eq_ignore_ascii_case("yes")
+    })
+}
+
+fn set_nonempty_env(name: &str, target: &mut String) {
+    if let Ok(value) = std::env::var(name) {
+        if !value.trim().is_empty() {
+            *target = value;
+        }
     }
 }
 

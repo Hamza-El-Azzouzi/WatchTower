@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
 
-use crate::storage::{Agent, DataPoint, TimeSeriesStore};
+use crate::storage::{Agent, DataPoint, ProcessSnapshot, TimeSeriesStore};
 
 #[derive(Clone)]
 enum AccessScope {
@@ -32,6 +32,7 @@ impl AccessScope {
     fn allows_message(&self, message: &WsMessage) -> bool {
         match message {
             WsMessage::Metric { agent_id, .. }
+            | WsMessage::ProcessSnapshot { agent_id, .. }
             | WsMessage::Log { agent_id, .. }
             | WsMessage::Alert { agent_id, .. }
             | WsMessage::HistoricalMetrics { agent_id, .. } => self.allows(agent_id),
@@ -58,7 +59,13 @@ async fn authenticate_socket(
     let token = payload.get("token")?.as_str()?;
     let auth = state.auth_service.as_ref()?;
 
-    if auth.validate_admin_token(token).await.ok().flatten().is_some() {
+    if auth
+        .validate_admin_token(token)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+    {
         return Some(AccessScope::Admin);
     }
     let key_id = auth.validate_api_key(token).await.ok().flatten()?;
@@ -80,6 +87,11 @@ pub enum WsMessage {
         agent_id: String,
         metric_name: String,
         value: f64,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    ProcessSnapshot {
+        agent_id: String,
+        processes: Vec<ProcessSnapshot>,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
     // Real-time log entry
@@ -203,10 +215,7 @@ pub async fn ws_metrics_handler(
     ws.on_upgrade(|socket| handle_metrics_socket(socket, state))
 }
 
-async fn handle_metrics_socket(
-    mut socket: WebSocket,
-    state: Arc<crate::api::AppState>,
-) {
+async fn handle_metrics_socket(mut socket: WebSocket, state: Arc<crate::api::AppState>) {
     let Some(scope) = authenticate_socket(&mut socket, &state).await else {
         warn!("Rejected unauthenticated metrics WebSocket");
         return;

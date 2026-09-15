@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 
 /// Log level for log entries
@@ -104,6 +105,8 @@ pub struct LogCollector {
     file_states: Arc<Mutex<HashMap<PathBuf, FileState>>>,
     buffer: Arc<Mutex<Vec<LogEntryInput>>>,
     batch_size: usize,
+    batch_interval: Duration,
+    last_flush: Instant,
     _watcher: RecommendedWatcher,
     event_rx: Receiver<Result<Event, notify::Error>>,
     log_patterns: Vec<LogPattern>,
@@ -159,7 +162,12 @@ impl LogPattern {
 }
 
 impl LogCollector {
-    pub fn new(agent_id: String, log_paths: Vec<String>, batch_size: usize) -> Result<Self> {
+    pub fn new(
+        agent_id: String,
+        log_paths: Vec<String>,
+        batch_size: usize,
+        batch_interval_seconds: u64,
+    ) -> Result<Self> {
         info!("Initializing log collector for {} files", log_paths.len());
 
         let (tx, rx) = channel();
@@ -202,6 +210,8 @@ impl LogCollector {
             file_states,
             buffer,
             batch_size,
+            batch_interval: Duration::from_secs(batch_interval_seconds.max(1)),
+            last_flush: Instant::now(),
             _watcher: watcher,
             event_rx: rx,
             log_patterns: LogPattern::common_patterns(),
@@ -324,27 +334,24 @@ impl LogCollector {
         Ok(())
     }
 
-    /// Get buffered logs and optionally clear them
-    pub fn get_logs(&self, clear: bool) -> Vec<LogEntryInput> {
-        let mut buffer = self.buffer.lock().expect("buffer lock poisoned");
-        let logs = buffer.clone();
-
-        if clear {
-            buffer.clear();
-        }
-
-        logs
-    }
-
-    /// Check if buffer should be flushed
+    /// Check if a non-empty buffer reached its size or time threshold.
     pub fn should_flush(&self) -> bool {
         let buffer = self.buffer.lock().expect("buffer lock poisoned");
-        buffer.len() >= self.batch_size
+        !buffer.is_empty()
+            && (buffer.len() >= self.batch_size || self.last_flush.elapsed() >= self.batch_interval)
     }
 
-    /// Get logs payload for sending to server
+    /// Build a payload without deleting buffered entries. They are acknowledged only
+    /// after the server accepts the batch so transient failures do not lose logs.
     pub fn create_payload(&self) -> Option<LogsPayload> {
-        let logs = self.get_logs(true);
+        let logs = self
+            .buffer
+            .lock()
+            .expect("buffer lock poisoned")
+            .iter()
+            .take(self.batch_size)
+            .cloned()
+            .collect::<Vec<_>>();
 
         if logs.is_empty() {
             None
@@ -354,6 +361,13 @@ impl LogCollector {
                 logs,
             })
         }
+    }
+
+    pub fn mark_sent(&mut self, count: usize) {
+        let mut buffer = self.buffer.lock().expect("buffer lock poisoned");
+        let acknowledged = count.min(buffer.len());
+        buffer.drain(..acknowledged);
+        self.last_flush = Instant::now();
     }
 }
 

@@ -152,9 +152,14 @@ username = "monitor_user"
 password = "secure_password"
 ```
 
-Container deployments can override the core settings with `AGENT_NAME`,
+Service and container deployments can override settings with `AGENT_NAME`,
 `SERVER_URL`, `API_KEY`, `COLLECTION_INTERVAL`, `PROCESS_WATCH_ENABLED`, and a
-comma-separated `PROCESS_WATCH_NAMES` value.
+comma-separated `PROCESS_WATCH_NAMES` value. Optional database monitoring uses
+`DB_MONITOR_ENABLED`, `DB_MONITOR_TYPE`, `DB_MONITOR_HOST`, `DB_MONITOR_PORT`,
+`DB_MONITOR_DATABASE`, `DB_MONITOR_USERNAME`, and `DB_MONITOR_PASSWORD`.
+Optional file-log collection uses `LOG_COLLECTION_ENABLED`, comma-separated
+`LOG_PATHS`, `LOG_BATCH_SIZE`, and `LOG_BATCH_INTERVAL_SECONDS`. Keep secrets in
+a root-owned environment file with mode `0600`; do not commit them.
 
 ---
 
