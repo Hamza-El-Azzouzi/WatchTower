@@ -263,7 +263,7 @@ impl TimeSeriesStore {
         }
 
         // Sort by timestamp
-        points.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        points.sort_by_key(|point| point.timestamp);
     }
 
     /// Insert multiple metrics from a payload
@@ -464,7 +464,7 @@ impl TimeSeriesStore {
         }
 
         // Sort by timestamp descending (most recent first)
-        logs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        logs.sort_by_key(|log| std::cmp::Reverse(log.timestamp));
     }
 
     /// Query logs with filters

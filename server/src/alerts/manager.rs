@@ -541,7 +541,7 @@ impl AlertManager {
     pub async fn get_all_alerts(&self) -> Vec<Alert> {
         let alerts = self.alerts_cache.read().await;
         let mut all: Vec<Alert> = alerts.values().cloned().collect();
-        all.sort_by(|a, b| b.triggered_at.cmp(&a.triggered_at));
+        all.sort_by_key(|alert| std::cmp::Reverse(alert.triggered_at));
         all
     }
 
