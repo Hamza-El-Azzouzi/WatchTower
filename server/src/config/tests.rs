@@ -1,13 +1,18 @@
 use super::*;
 use std::env;
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn test_default_config() {
+    let _guard = ENV_LOCK.lock().expect("environment test lock poisoned");
     let config = Config::default();
 
     assert_eq!(config.server.host, "0.0.0.0");
     assert_eq!(config.server.port, 8080);
     assert_eq!(config.storage.max_points_per_metric, 10_000);
+    assert_eq!(config.storage.persistence_interval_seconds, 15);
     assert!(config.database.enabled);
     assert!(config.auth.enabled);
     assert!(!config.auth.require_api_key);
@@ -15,6 +20,7 @@ fn test_default_config() {
 
 #[test]
 fn test_bind_address() {
+    let _guard = ENV_LOCK.lock().expect("environment test lock poisoned");
     let config = Config::default();
     assert_eq!(config.bind_address(), "0.0.0.0:8080");
 
@@ -26,6 +32,7 @@ fn test_bind_address() {
 
 #[test]
 fn test_env_override_server_config() {
+    let _guard = ENV_LOCK.lock().expect("environment test lock poisoned");
     env::set_var("SERVER_HOST", "127.0.0.1");
     env::set_var("SERVER_PORT", "9090");
 
@@ -41,6 +48,7 @@ fn test_env_override_server_config() {
 
 #[test]
 fn test_env_override_database_config() {
+    let _guard = ENV_LOCK.lock().expect("environment test lock poisoned");
     env::set_var("DATABASE_ENABLED", "false");
     env::set_var("DATABASE_URL", "sqlite:test.db");
 
@@ -56,6 +64,7 @@ fn test_env_override_database_config() {
 
 #[test]
 fn test_env_override_auth_config() {
+    let _guard = ENV_LOCK.lock().expect("environment test lock poisoned");
     env::set_var("AUTH_ENABLED", "false");
     env::set_var("AUTH_REQUIRE_API_KEY", "true");
 
@@ -71,6 +80,7 @@ fn test_env_override_auth_config() {
 
 #[test]
 fn test_env_override_retention_config() {
+    let _guard = ENV_LOCK.lock().expect("environment test lock poisoned");
     env::set_var("RETENTION_RAW_METRICS_HOURS", "48");
     env::set_var("RETENTION_ALERTS_DAYS", "7");
     env::set_var("RETENTION_CLEANUP_INTERVAL_HOURS", "6");
@@ -89,18 +99,23 @@ fn test_env_override_retention_config() {
 
 #[test]
 fn test_env_override_storage_config() {
+    let _guard = ENV_LOCK.lock().expect("environment test lock poisoned");
     env::set_var("STORAGE_MAX_POINTS", "5000");
+    env::set_var("METRICS_PERSIST_INTERVAL_SECONDS", "20");
 
     let mut config = Config::default();
     config.apply_env_overrides();
 
     assert_eq!(config.storage.max_points_per_metric, 5000);
+    assert_eq!(config.storage.persistence_interval_seconds, 20);
 
     env::remove_var("STORAGE_MAX_POINTS");
+    env::remove_var("METRICS_PERSIST_INTERVAL_SECONDS");
 }
 
 #[test]
 fn test_env_override_invalid_values() {
+    let _guard = ENV_LOCK.lock().expect("environment test lock poisoned");
     // Test that invalid values are ignored (use fresh config to avoid test pollution)
     let initial_config = Config::default();
     let initial_port = initial_config.server.port;
@@ -124,6 +139,7 @@ fn test_env_override_invalid_values() {
 
 #[test]
 fn test_default_configs() {
+    let _guard = ENV_LOCK.lock().expect("environment test lock poisoned");
     let db_config = DatabaseConfig::default();
     assert!(db_config.enabled);
 

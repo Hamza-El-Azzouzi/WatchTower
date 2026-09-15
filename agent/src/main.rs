@@ -7,7 +7,7 @@ use anyhow::Result;
 use chrono::Local;
 use clap::Parser;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time;
 use tracing::{debug, error, info, warn};
 
@@ -160,8 +160,8 @@ async fn run_agent(config: Config) -> Result<()> {
     let db_collector = if let Some(ref db_config) = config.database {
         if db_config.enabled {
             info!(
-                "Database monitoring enabled - {} at {}:{}",
-                db_config.db_type, db_config.host, db_config.port
+                "Database monitoring enabled - {} at {}:{} every {} seconds",
+                db_config.db_type, db_config.host, db_config.port, db_config.interval_seconds
             );
             match DatabaseCollector::new(db_config.clone()) {
                 Ok(collector) => Some(collector),
@@ -230,6 +230,8 @@ async fn run_agent(config: Config) -> Result<()> {
     let mut collectors = MetricCollectors::new();
     let interval = Duration::from_secs(config.collection.interval_seconds);
     let mut interval_timer = time::interval(interval);
+    interval_timer.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+    let mut last_database_collection: Option<Instant> = None;
 
     println!("\n{:-^80}", " Monitoring Agent Started ");
     println!(
@@ -267,7 +269,15 @@ async fn run_agent(config: Config) -> Result<()> {
             }
 
             // Collect database metrics if database collector is enabled
-            if let Some(ref db_collector) = db_collector {
+            let database_due = config.database.as_ref().is_some_and(|database| {
+                last_database_collection.is_none_or(|last| {
+                    last.elapsed() >= Duration::from_secs(database.interval_seconds)
+                })
+            });
+            if database_due {
+                last_database_collection = Some(Instant::now());
+            }
+            if let (true, Some(db_collector)) = (database_due, db_collector.as_ref()) {
                 match db_collector.collect().await {
                     Ok(db_metrics) => {
                         // Add all database metrics to the map

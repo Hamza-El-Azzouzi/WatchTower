@@ -9,6 +9,7 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tracing::{error, info, warn};
@@ -32,6 +33,7 @@ impl AccessScope {
     fn allows_message(&self, message: &WsMessage) -> bool {
         match message {
             WsMessage::Metric { agent_id, .. }
+            | WsMessage::MetricBatch { agent_id, .. }
             | WsMessage::ProcessSnapshot { agent_id, .. }
             | WsMessage::Log { agent_id, .. }
             | WsMessage::Alert { agent_id, .. }
@@ -87,6 +89,11 @@ pub enum WsMessage {
         agent_id: String,
         metric_name: String,
         value: f64,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    },
+    MetricBatch {
+        agent_id: String,
+        metrics: HashMap<String, f64>,
         timestamp: chrono::DateTime<chrono::Utc>,
     },
     ProcessSnapshot {
@@ -189,21 +196,16 @@ impl WebSocketManager {
     }
 
     pub fn broadcast_metric(&self, msg: WsMessage) {
-        if let Err(e) = self.metrics_tx.send(msg) {
-            warn!("Failed to broadcast metric: {}", e);
-        }
+        // Having no active dashboard subscribers is normal, not an error.
+        let _ = self.metrics_tx.send(msg);
     }
 
     pub fn broadcast_log(&self, msg: WsMessage) {
-        if let Err(e) = self.logs_tx.send(msg) {
-            warn!("Failed to broadcast log: {}", e);
-        }
+        let _ = self.logs_tx.send(msg);
     }
 
     pub fn broadcast_alert(&self, msg: WsMessage) {
-        if let Err(e) = self.alerts_tx.send(msg) {
-            warn!("Failed to broadcast alert: {}", e);
-        }
+        let _ = self.alerts_tx.send(msg);
     }
 }
 

@@ -42,6 +42,8 @@ pub struct LogsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatabaseConfig {
     pub enabled: bool,
+    #[serde(default = "default_database_interval")]
+    pub interval_seconds: u64,
     pub db_type: String, // "postgres", "mysql"
     pub host: String,
     pub port: u16,
@@ -127,6 +129,10 @@ fn default_batch_interval() -> u64 {
     5
 }
 
+fn default_database_interval() -> u64 {
+    15
+}
+
 impl Config {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let contents = fs::read_to_string(path)?;
@@ -202,6 +208,7 @@ impl Config {
             if enabled {
                 let mut database = self.database.take().unwrap_or_else(|| DatabaseConfig {
                     enabled: true,
+                    interval_seconds: default_database_interval(),
                     db_type: "postgres".to_string(),
                     host: "127.0.0.1".to_string(),
                     port: 5432,
@@ -219,6 +226,13 @@ impl Config {
                     if let Ok(port) = port.parse::<u16>() {
                         if port > 0 {
                             database.port = port;
+                        }
+                    }
+                }
+                if let Ok(interval) = std::env::var("DB_MONITOR_INTERVAL_SECONDS") {
+                    if let Ok(interval) = interval.parse::<u64>() {
+                        if interval > 0 {
+                            database.interval_seconds = interval;
                         }
                     }
                 }

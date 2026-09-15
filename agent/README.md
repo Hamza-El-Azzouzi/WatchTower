@@ -144,6 +144,7 @@ names = ["postgres", "nginx"]
 # Optional: Database monitoring
 [database]
 enabled = true
+interval_seconds = 15
 db_type = "postgres"  # or "mysql"
 host = "localhost"
 port = 5432
@@ -156,7 +157,8 @@ Service and container deployments can override settings with `AGENT_NAME`,
 `SERVER_URL`, `API_KEY`, `COLLECTION_INTERVAL`, `PROCESS_WATCH_ENABLED`, and a
 comma-separated `PROCESS_WATCH_NAMES` value. Optional database monitoring uses
 `DB_MONITOR_ENABLED`, `DB_MONITOR_TYPE`, `DB_MONITOR_HOST`, `DB_MONITOR_PORT`,
-`DB_MONITOR_DATABASE`, `DB_MONITOR_USERNAME`, and `DB_MONITOR_PASSWORD`.
+`DB_MONITOR_DATABASE`, `DB_MONITOR_USERNAME`, `DB_MONITOR_PASSWORD`, and
+`DB_MONITOR_INTERVAL_SECONDS`.
 Optional file-log collection uses `LOG_COLLECTION_ENABLED`, comma-separated
 `LOG_PATHS`, `LOG_BATCH_SIZE`, and `LOG_BATCH_INTERVAL_SECONDS`. Keep secrets in
 a root-owned environment file with mode `0600`; do not commit them.

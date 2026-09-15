@@ -33,6 +33,8 @@ pub struct ServerConfig {
 pub struct StorageConfig {
     #[serde(default = "default_max_points")]
     pub max_points_per_metric: usize,
+    #[serde(default = "default_persistence_interval")]
+    pub persistence_interval_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +107,10 @@ fn default_port() -> u16 {
 
 fn default_max_points() -> usize {
     10_000
+}
+
+fn default_persistence_interval() -> u64 {
+    15
 }
 
 fn default_database_url() -> String {
@@ -287,6 +293,13 @@ impl Config {
                 self.storage.max_points_per_metric = mp;
             }
         }
+        if let Ok(interval) = std::env::var("METRICS_PERSIST_INTERVAL_SECONDS") {
+            if let Ok(interval) = interval.parse::<u64>() {
+                if interval > 0 {
+                    self.storage.persistence_interval_seconds = interval;
+                }
+            }
+        }
     }
 
     pub fn default() -> Self {
@@ -297,6 +310,7 @@ impl Config {
             },
             storage: StorageConfig {
                 max_points_per_metric: default_max_points(),
+                persistence_interval_seconds: default_persistence_interval(),
             },
             database: DatabaseConfig::default(),
             retention: RetentionConfig::default(),

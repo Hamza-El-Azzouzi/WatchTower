@@ -90,13 +90,14 @@ if [[ -n "$AGENT_API_KEY" ]]; then
     printf 'AGENT_NAME=%s\n' "$AGENT_NAME"
     printf 'SERVER_URL=http://127.0.0.1:8080\n'
     printf 'API_KEY=%s\n' "$AGENT_API_KEY"
-    printf 'COLLECTION_INTERVAL=15\n'
+    printf 'COLLECTION_INTERVAL=2\n'
     printf 'PROCESS_WATCH_ENABLED=true\n'
     printf 'PROCESS_WATCH_NAMES=%s\n' "$PROCESS_WATCH_NAMES"
     printf 'DB_MONITOR_ENABLED=true\n'
     printf 'DB_MONITOR_TYPE=postgres\n'
     printf 'DB_MONITOR_HOST=127.0.0.1\n'
     printf 'DB_MONITOR_PORT=5432\n'
+    printf 'DB_MONITOR_INTERVAL_SECONDS=15\n'
     printf 'DB_MONITOR_DATABASE=%s\n' "$POSTGRES_DB"
     printf 'DB_MONITOR_USERNAME=%s\n' "$POSTGRES_USER"
     printf 'DB_MONITOR_PASSWORD=%s\n' "$POSTGRES_PASSWORD"

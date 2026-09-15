@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgPoolOptions};
-use sqlx::Row;
+use sqlx::{Postgres, QueryBuilder, Row};
 use tracing::info;
 
 use crate::alerts::{Alert, AlertCondition, AlertRule, AlertSeverity, AlertState};
@@ -396,18 +396,20 @@ impl Database {
         metrics: &[(String, f64)],
         timestamp: DateTime<Utc>,
     ) -> Result<()> {
-        // Batch insert for performance
-        for (metric_name, value) in metrics {
-            sqlx::query(
-                "INSERT INTO metrics (agent_id, metric_name, value, timestamp) VALUES ($1, $2, $3, $4)",
-            )
-            .bind(agent_id)
-            .bind(metric_name)
-            .bind(value)
-            .bind(timestamp)
-            .execute(&self.pool)
-            .await?;
+        if metrics.is_empty() {
+            return Ok(());
         }
+
+        let mut query = QueryBuilder::<Postgres>::new(
+            "INSERT INTO metrics (agent_id, metric_name, value, timestamp) ",
+        );
+        query.push_values(metrics, |mut row, (metric_name, value)| {
+            row.push_bind(agent_id)
+                .push_bind(metric_name)
+                .push_bind(value)
+                .push_bind(timestamp);
+        });
+        query.build().execute(&self.pool).await?;
 
         Ok(())
     }

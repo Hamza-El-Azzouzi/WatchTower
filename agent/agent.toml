@@ -25,6 +25,7 @@ retry_delay_seconds = 2
 
 [database]
 enabled = true
+interval_seconds = 15
 db_type = "postgres"
 host = "localhost"
 port = 5432

@@ -6,8 +6,10 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tracing::{error, info};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tracing::{debug, error, info};
 
 use crate::alerts::manager::AlertManager;
 use crate::auth::{
@@ -113,6 +115,8 @@ pub struct AppState {
     pub database: Option<Arc<Database>>,
     pub auth_service: Option<Arc<AuthService>>,
     pub ws_manager: Arc<WebSocketManager>,
+    metrics_persistence_interval: Duration,
+    last_metrics_persistence: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 impl AppState {
@@ -122,6 +126,7 @@ impl AppState {
         database: Option<Arc<Database>>,
         auth_service: Option<Arc<AuthService>>,
         ws_manager: Arc<WebSocketManager>,
+        metrics_persistence_interval_seconds: u64,
     ) -> Self {
         Self {
             store,
@@ -129,7 +134,27 @@ impl AppState {
             database,
             auth_service,
             ws_manager,
+            metrics_persistence_interval: Duration::from_secs(
+                metrics_persistence_interval_seconds.max(1),
+            ),
+            last_metrics_persistence: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    fn claim_metrics_persistence(&self, agent_id: &str) -> bool {
+        let now = Instant::now();
+        let mut last = self
+            .last_metrics_persistence
+            .lock()
+            .expect("metrics persistence lock poisoned");
+        if last
+            .get(agent_id)
+            .is_some_and(|previous| previous.elapsed() < self.metrics_persistence_interval)
+        {
+            return false;
+        }
+        last.insert(agent_id.to_string(), now);
+        true
     }
 }
 
@@ -167,7 +192,7 @@ pub async fn ingest_metrics(
 ) -> Result<impl IntoResponse, ApiError> {
     validate_metrics_payload(&payload)?;
 
-    info!(
+    debug!(
         "Received metrics from agent '{}' with {} metrics",
         payload.agent_id,
         payload.metrics.len()
@@ -209,47 +234,13 @@ pub async fn ingest_metrics(
     // Store metrics in-memory for fast queries
     state.store.insert_metrics(payload.clone());
 
-    // Persist to database if available
-    if let Some(db) = &state.database {
-        let metrics: Vec<(String, f64)> = payload
-            .metrics
-            .iter()
-            .map(|(k, v)| (k.clone(), *v))
-            .collect();
-
-        // Register/update agent in database
-        if let Err(e) = db
-            .register_agent(
-                &payload.agent_id,
-                api_key_id,
-                None, // hostname could be extracted from agent metadata
-                None, // os
-                None, // arch
-            )
-            .await
-        {
-            error!("Failed to register agent in database: {}", e);
-        }
-
-        // Insert metrics
-        if let Err(e) = db
-            .insert_metrics(&payload.agent_id, &metrics, payload.timestamp)
-            .await
-        {
-            error!("Failed to persist metrics to database: {}", e);
-            // Continue anyway - metrics are still in memory
-        }
-    }
-
-    // Broadcast each metric via WebSocket
-    for (metric_name, value) in &payload.metrics {
-        state.ws_manager.broadcast_metric(WsMessage::Metric {
-            agent_id: payload.agent_id.clone(),
-            metric_name: metric_name.clone(),
-            value: *value,
-            timestamp: payload.timestamp,
-        });
-    }
+    // Publish one coherent live sample before durable I/O. Browsers receive
+    // realtime data without waiting for PostgreSQL.
+    state.ws_manager.broadcast_metric(WsMessage::MetricBatch {
+        agent_id: payload.agent_id.clone(),
+        metrics: payload.metrics.clone(),
+        timestamp: payload.timestamp,
+    });
     if !payload.processes.is_empty() {
         state
             .ws_manager
@@ -258,6 +249,34 @@ pub async fn ingest_metrics(
                 processes: payload.processes.clone(),
                 timestamp: payload.timestamp,
             });
+    }
+
+    // Persist at a lower cadence in the background. This keeps historical data
+    // durable without turning fast live samples into excessive database rows.
+    if state.claim_metrics_persistence(&payload.agent_id) {
+        if let Some(db) = &state.database {
+            let db = db.clone();
+            let agent_id = payload.agent_id.clone();
+            let timestamp = payload.timestamp;
+            let metrics: Vec<(String, f64)> = payload
+                .metrics
+                .iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect();
+
+            tokio::spawn(async move {
+                if let Err(e) = db
+                    .register_agent(&agent_id, api_key_id, None, None, None)
+                    .await
+                {
+                    error!("Failed to register agent in database: {}", e);
+                    return;
+                }
+                if let Err(e) = db.insert_metrics(&agent_id, &metrics, timestamp).await {
+                    error!("Failed to persist metrics to database: {}", e);
+                }
+            });
+        }
     }
 
     Ok((

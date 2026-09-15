@@ -209,6 +209,7 @@ async fn main() -> Result<()> {
         database.clone(),
         auth_service,
         ws_manager.clone(),
+        config.storage.persistence_interval_seconds,
     ));
 
     // Build router with protected routes (metrics/logs ingestion + dashboard read endpoints)
