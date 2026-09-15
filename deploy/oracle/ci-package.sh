@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-required=(ORACLE_HOST ORACLE_USER SSH_PRIVATE_KEY SSH_KNOWN_HOSTS API_DOMAIN DASHBOARD_ORIGIN POSTGRES_PASSWORD ADMIN_JWT_SECRET BOOTSTRAP_ADMIN_PASSWORD)
+required=(ORACLE_HOST ORACLE_USER ORACLE_PLATFORM SSH_PRIVATE_KEY SSH_KNOWN_HOSTS API_DOMAIN DASHBOARD_ORIGIN POSTGRES_PASSWORD ADMIN_JWT_SECRET BOOTSTRAP_ADMIN_PASSWORD)
 for name in "${required[@]}"; do
   if [[ -z "${!name:-}" ]]; then
     echo "Required CI/CD variable is missing: $name" >&2
@@ -36,6 +36,7 @@ umask 077
   printf 'AGENT_API_KEY_B64=%s\n' "$(encode "${ORACLE_AGENT_API_KEY:-}")"
   printf 'AGENT_NAME_B64=%s\n' "$(encode "${ORACLE_AGENT_NAME:-oracle-production}")"
   printf 'PROCESS_WATCH_NAMES_B64=%s\n' "$(encode "${PROCESS_WATCH_NAMES:-gitlab,postgres,docker,caddy}")"
+  printf 'ORACLE_PLATFORM_B64=%s\n' "$(encode "$ORACLE_PLATFORM")"
 } > "$release_dir/variables.b64"
 
 target="${ORACLE_USER}@${ORACLE_HOST}"

@@ -20,6 +20,15 @@ BOOTSTRAP_ADMIN_PASSWORD="$(decode "$BOOTSTRAP_ADMIN_PASSWORD_B64")"
 AGENT_API_KEY="$(decode "$AGENT_API_KEY_B64")"
 AGENT_NAME="$(decode "$AGENT_NAME_B64")"
 PROCESS_WATCH_NAMES="$(decode "$PROCESS_WATCH_NAMES_B64")"
+ORACLE_PLATFORM="$(decode "$ORACLE_PLATFORM_B64")"
+
+case "$(uname -m):$ORACLE_PLATFORM" in
+  aarch64:linux/arm64|x86_64:linux/amd64) ;;
+  *)
+    echo "Refusing deployment: host architecture $(uname -m) does not match $ORACLE_PLATFORM." >&2
+    exit 1
+    ;;
+esac
 
 safe_value='^[A-Za-z0-9._~:/@,+-]+$'
 for value in "$SERVER_IMAGE" "$API_DOMAIN" "$DASHBOARD_ORIGIN" "$POSTGRES_DB" "$POSTGRES_USER" "$POSTGRES_PASSWORD" "$ADMIN_JWT_SECRET" "$BOOTSTRAP_ADMIN_USERNAME" "$BOOTSTRAP_ADMIN_PASSWORD"; do
@@ -50,6 +59,9 @@ umask 077
   printf 'BOOTSTRAP_ADMIN_PASSWORD=%s\n' "$BOOTSTRAP_ADMIN_PASSWORD"
 } > "$install_dir/.env"
 
+docker_config_dir="$(mktemp -d /tmp/watchtower-docker-config.XXXXXX)"
+trap 'rm -rf "$docker_config_dir"' EXIT
+export DOCKER_CONFIG="$docker_config_dir"
 printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin
 cd "$install_dir"
 docker compose --env-file .env -f compose.yml pull

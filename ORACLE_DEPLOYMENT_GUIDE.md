@@ -411,3 +411,8 @@ The `Deploy server and agent to Oracle` GitHub Actions workflow now performs
 this deployment automatically after every push to `main`. It can also be run
 manually from the Actions tab. Vercel continues deploying the separate frontend
 repository independently.
+
+`ORACLE_PLATFORM` must be configured in the `production` environment. The
+workflow validates it before building, and the remote installer checks it again
+against `uname -m`. This prevents an AMD64 artifact from being deployed to an
+ARM64 instance, or the reverse.

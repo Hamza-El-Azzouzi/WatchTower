@@ -30,9 +30,33 @@ jobs:
       - name: Test agent
         run: cargo test --locked --manifest-path agent/Cargo.toml
 
+  configuration:
+    name: Validate production configuration
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: production
+    outputs:
+      oracle_platform: ${{ steps.platform.outputs.value }}
+    steps:
+      - name: Validate Oracle architecture
+        id: platform
+        shell: bash
+        env:
+          ORACLE_PLATFORM: ${{ vars.ORACLE_PLATFORM }}
+        run: |
+          case "$ORACLE_PLATFORM" in
+            linux/arm64|linux/amd64)
+              echo "value=$ORACLE_PLATFORM" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "ORACLE_PLATFORM must be explicitly set to linux/arm64 or linux/amd64." >&2
+              exit 1
+              ;;
+          esac
+
   publish-server:
     name: Publish server image
-    needs: verify
+    needs: configuration
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.image.outputs.value }}
@@ -55,7 +79,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./server
-          platforms: ${{ vars.ORACLE_PLATFORM || 'linux/amd64' }}
+          platforms: ${{ needs.configuration.outputs.oracle_platform }}
           push: true
           tags: ${{ steps.image.outputs.value }}
           cache-from: type=gha,scope=oracle-server
@@ -63,7 +87,7 @@ jobs:
 
   build-agent:
     name: Build native agent
-    needs: verify
+    needs: configuration
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,7 +99,7 @@ jobs:
           context: ./agent
           file: ./agent/Dockerfile.release
           target: export
-          platforms: ${{ vars.ORACLE_PLATFORM || 'linux/amd64' }}
+          platforms: ${{ needs.configuration.outputs.oracle_platform }}
           outputs: type=local,dest=release
           cache-from: type=gha,scope=oracle-agent
           cache-to: type=gha,mode=max,scope=oracle-agent
@@ -90,7 +114,7 @@ jobs:
 
   deploy:
     name: Deploy production
-    needs: [publish-server, build-agent]
+    needs: [configuration, publish-server, build-agent]
     runs-on: ubuntu-latest
     environment:
       name: production
@@ -101,6 +125,7 @@ jobs:
       CI_REGISTRY_USER: ${{ github.actor }}
       CI_REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
       CI_COMMIT_SHA: ${{ github.sha }}
+      ORACLE_PLATFORM: ${{ needs.configuration.outputs.oracle_platform }}
       ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
       ORACLE_USER: ${{ secrets.ORACLE_USER }}
       API_DOMAIN: ${{ vars.API_DOMAIN }}
