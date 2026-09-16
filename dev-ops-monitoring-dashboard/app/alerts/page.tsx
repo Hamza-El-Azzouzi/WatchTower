@@ -35,7 +35,7 @@ export default function AlertsPage() {
     try {
       const isAdmin = localStorage.getItem('user_type') === 'admin';
       const alertsData = await getAlerts();
-      const rulesData = isAdmin ? await getAlertRules() : { rules: [], total: 0 };
+      const rulesData = !isAdmin ? await getAlertRules() : { rules: [], total: 0 };
       
       const allAlerts = [...alertsData.active_alerts, ...alertsData.recent_alerts];
       setAlerts(allAlerts);
@@ -85,7 +85,7 @@ export default function AlertsPage() {
           </div>
           <p className="text-muted-foreground">Monitor and manage system alerts</p>
         </div>
-        {isAdmin && (
+        {!isAdmin && (
           <Link
             href="/alerts/rules/new"
             className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
@@ -98,13 +98,13 @@ export default function AlertsPage() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        {isAdmin && <div className="glass-morphism rounded-xl p-4">
+        <div className="glass-morphism rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2">
             <AlertTriangle className="w-5 h-5 text-red-400" />
             <span className="text-sm text-muted-foreground">Firing</span>
           </div>
           <div className="text-3xl font-bold text-red-400">{activeAlerts.length}</div>
-        </div>}
+        </div>
         
         <div className="glass-morphism rounded-xl p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -131,11 +131,15 @@ export default function AlertsPage() {
         </div>
       </div>
 
-      {isAdmin && <AlertingOperations rules={rules} />}
+      {!isAdmin && <>
+        <p className="text-sm text-muted-foreground mb-4">Rules, notification channels, and maintenance windows apply only to agents owned by your enterprise API key.</p>
+        <AlertingOperations rules={rules} />
+      </>}
+      {isAdmin && <p className="glass-morphism rounded-xl p-4 mb-6 text-sm text-muted-foreground">Platform administrators manage API keys. Sign in with an enterprise API key to manage that enterprise’s alerting policies.</p>}
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6 border-b border-gray-700">
-        {isAdmin && <button
+        <button
           onClick={() => setActiveTab('active')}
           className={`px-4 py-2 font-medium transition-colors ${
             activeTab === 'active'
@@ -144,7 +148,7 @@ export default function AlertsPage() {
           }`}
         >
           Active ({activeAlerts.length + pendingAlerts.length})
-        </button>}
+        </button>
         <button
           onClick={() => setActiveTab('history')}
           className={`px-4 py-2 font-medium transition-colors ${
@@ -226,14 +230,14 @@ export default function AlertsPage() {
             <div className="glass-morphism rounded-xl p-12 text-center">
               <Settings className="w-16 h-16 text-gray-400 mx-auto mb-4" />
               <h3 className="text-xl font-semibold mb-2">No Alert Rules</h3>
-              <p className="text-muted-foreground mb-4">Create your first alert rule to start monitoring</p>
-              <Link
+              <p className="text-muted-foreground mb-4">{isAdmin ? 'Enterprise alert policies are managed by their API key owners.' : 'Create your first alert rule for your enterprise’s agents.'}</p>
+              {!isAdmin && <Link
                 href="/alerts/rules/new"
                 className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
               >
                 <Plus className="w-4 h-4" />
                 Create Alert Rule
-              </Link>
+              </Link>}
             </div>
           ) : (
             rules.map(rule => (

@@ -68,6 +68,18 @@ impl Database {
         &self.pool
     }
 
+    pub async fn agent_owners(&self) -> Result<std::collections::HashMap<String, i64>> {
+        let rows = sqlx::query(
+            "SELECT id,api_key_id::BIGINT AS owner FROM agents WHERE api_key_id IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("id"), row.get("owner")))
+            .collect())
+    }
+
     // Check if database is healthy
     pub async fn health_check(&self) -> Result<()> {
         sqlx::query("SELECT 1")
@@ -708,9 +720,9 @@ impl Database {
             INSERT INTO alert_rules (
                 rule_id, name, description, metric, condition_type, threshold, 
                 threshold_percent, duration_seconds, severity, channels, 
-                agent_filter, cooldown_seconds, enabled, created_at, updated_at
+                agent_filter, cooldown_seconds, enabled, created_at, updated_at, owner_api_key_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             ON CONFLICT (rule_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 description = EXCLUDED.description,
@@ -742,6 +754,7 @@ impl Database {
         .bind(rule.enabled)
         .bind(rule.created_at)
         .bind(Utc::now())
+        .bind(rule.owner_api_key_id)
         .execute(&self.pool)
         .await
         .context("Failed to create alert rule")?;
@@ -755,7 +768,7 @@ impl Database {
             r#"
             SELECT rule_id, name, description, metric, condition_type, threshold,
                    threshold_percent, duration_seconds, severity, channels,
-                   agent_filter, cooldown_seconds, enabled, created_at, updated_at
+                   agent_filter, cooldown_seconds, enabled, created_at, updated_at, owner_api_key_id
             FROM alert_rules
             WHERE rule_id = $1
             "#,
@@ -778,7 +791,7 @@ impl Database {
             r#"
             SELECT rule_id, name, description, metric, condition_type, threshold,
                    threshold_percent, duration_seconds, severity, channels,
-                   agent_filter, cooldown_seconds, enabled, created_at, updated_at
+                   agent_filter, cooldown_seconds, enabled, created_at, updated_at, owner_api_key_id
             FROM alert_rules
             ORDER BY created_at DESC
             "#,
@@ -908,6 +921,7 @@ impl Database {
         let channels: Vec<String> = serde_json::from_value(channels_json).unwrap_or_default();
 
         Ok(AlertRule {
+            owner_api_key_id: row.get("owner_api_key_id"),
             id: row.try_get("rule_id").unwrap_or_default(),
             name: row.get("name"),
             description: row.get("description"),
@@ -1131,15 +1145,16 @@ impl Database {
     pub async fn create_notification_channel(
         &self,
         request: &CreateNotificationChannelRequest,
+        owner: i64,
     ) -> Result<NotificationChannel> {
         let id = uuid::Uuid::new_v4().to_string();
         let row = sqlx::query(
             r#"INSERT INTO notification_channels (
                 id, name, channel_type, webhook_url, email_to, smtp_host, smtp_port,
-                smtp_username, smtp_password, smtp_from, smtp_tls
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                smtp_username, smtp_password, smtp_from, smtp_tls, owner_api_key_id
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
             RETURNING id, name, channel_type, webhook_url, email_to, smtp_host, smtp_port,
-                      smtp_username, smtp_password, smtp_from, smtp_tls, enabled, created_at, updated_at"#,
+                      smtp_username, smtp_password, smtp_from, smtp_tls, enabled, created_at, updated_at, owner_api_key_id"#,
         )
         .bind(id)
         .bind(request.name.trim())
@@ -1152,6 +1167,7 @@ impl Database {
         .bind(request.smtp_password.as_deref())
         .bind(request.smtp_from.as_deref())
         .bind(request.smtp_tls)
+        .bind(owner)
         .fetch_one(&self.pool)
         .await
         .context("Failed to create notification channel")?;
@@ -1161,7 +1177,7 @@ impl Database {
     pub async fn list_notification_channels(&self) -> Result<Vec<NotificationChannel>> {
         let rows = sqlx::query(
             r#"SELECT id, name, channel_type, webhook_url, email_to, smtp_host, smtp_port,
-                      smtp_username, smtp_password, smtp_from, smtp_tls, enabled, created_at, updated_at
+                      smtp_username, smtp_password, smtp_from, smtp_tls, enabled, created_at, updated_at, owner_api_key_id
                FROM notification_channels ORDER BY name"#,
         )
         .fetch_all(&self.pool)
@@ -1174,7 +1190,7 @@ impl Database {
     pub async fn get_notification_channel(&self, id: &str) -> Result<Option<NotificationChannel>> {
         let row = sqlx::query(
             r#"SELECT id, name, channel_type, webhook_url, email_to, smtp_host, smtp_port,
-                      smtp_username, smtp_password, smtp_from, smtp_tls, enabled, created_at, updated_at
+                      smtp_username, smtp_password, smtp_from, smtp_tls, enabled, created_at, updated_at, owner_api_key_id
                FROM notification_channels WHERE id = $1"#,
         )
         .bind(id)
@@ -1210,6 +1226,7 @@ impl Database {
             _ => NotificationChannelType::GenericWebhook,
         };
         Ok(NotificationChannel {
+            owner_api_key_id: row.get("owner_api_key_id"),
             id: row.get("id"),
             name: row.get("name"),
             channel_type,
@@ -1230,13 +1247,14 @@ impl Database {
     pub async fn create_alert_silence(
         &self,
         request: &CreateAlertSilenceRequest,
+        owner: i64,
     ) -> Result<AlertSilence> {
         let id = uuid::Uuid::new_v4().to_string();
         let row = sqlx::query(
             r#"INSERT INTO alert_silences
-               (id, name, reason, rule_id, agent_id, starts_at, ends_at, created_by)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-               RETURNING id, name, reason, rule_id, agent_id, starts_at, ends_at, created_by, created_at"#,
+               (id, name, reason, rule_id, agent_id, starts_at, ends_at, created_by, owner_api_key_id)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+               RETURNING id, name, reason, rule_id, agent_id, starts_at, ends_at, created_by, created_at, owner_api_key_id"#,
         )
         .bind(id)
         .bind(request.name.trim())
@@ -1246,6 +1264,7 @@ impl Database {
         .bind(request.starts_at)
         .bind(request.ends_at)
         .bind(request.created_by.trim())
+        .bind(owner)
         .fetch_one(&self.pool)
         .await?;
         Ok(Self::row_to_alert_silence(row))
@@ -1253,7 +1272,7 @@ impl Database {
 
     pub async fn list_alert_silences(&self, active_only: bool) -> Result<Vec<AlertSilence>> {
         let rows = sqlx::query(
-            r#"SELECT id, name, reason, rule_id, agent_id, starts_at, ends_at, created_by, created_at
+            r#"SELECT id, name, reason, rule_id, agent_id, starts_at, ends_at, created_by, created_at, owner_api_key_id
                FROM alert_silences
                WHERE NOT $1 OR (starts_at <= NOW() AND ends_at > NOW())
                ORDER BY starts_at DESC"#,
@@ -1277,6 +1296,7 @@ impl Database {
             r#"SELECT EXISTS(
                  SELECT 1 FROM alert_silences
                  WHERE starts_at <= NOW() AND ends_at > NOW()
+                   AND owner_api_key_id = (SELECT api_key_id FROM agents WHERE id = $2)
                    AND (rule_id IS NULL OR rule_id = $1)
                    AND (agent_id IS NULL OR agent_id = $2)
                )"#,
@@ -1290,6 +1310,7 @@ impl Database {
 
     fn row_to_alert_silence(row: sqlx::postgres::PgRow) -> AlertSilence {
         AlertSilence {
+            owner_api_key_id: row.get("owner_api_key_id"),
             id: row.get("id"),
             name: row.get("name"),
             reason: row.get("reason"),
@@ -1311,14 +1332,15 @@ impl Database {
     ) -> Result<i64> {
         let id = sqlx::query_scalar::<_, i64>(
             r#"INSERT INTO notification_deliveries
-               (alert_id, channel_id, channel_name, event_type, status, payload)
-               VALUES ($1,$2,$3,$4,'pending',$5) RETURNING id"#,
+               (alert_id, channel_id, channel_name, event_type, status, payload, owner_api_key_id)
+               VALUES ($1,$2,$3,$4,'pending',$5,$6) RETURNING id"#,
         )
         .bind(alert_id)
         .bind(&channel.id)
         .bind(&channel.name)
         .bind(event_type)
         .bind(payload)
+        .bind(channel.owner_api_key_id)
         .fetch_one(&self.pool)
         .await?;
         Ok(id)
@@ -1333,13 +1355,14 @@ impl Database {
                       c.id AS c_id, c.name AS c_name, c.channel_type, c.webhook_url,
                       c.email_to, c.smtp_host, c.smtp_port, c.smtp_username, c.smtp_password,
                       c.smtp_from, c.smtp_tls, c.enabled, c.created_at AS c_created_at,
-                      c.updated_at AS c_updated_at
+                      c.updated_at AS c_updated_at, c.owner_api_key_id
                FROM notification_deliveries d
                JOIN notification_channels c ON c.id = d.channel_id
                WHERE d.status IN ('pending','failed')
                  AND d.attempt_count < d.max_attempts
                  AND d.next_attempt_at <= NOW()
                  AND c.enabled
+                 AND d.owner_api_key_id = c.owner_api_key_id
                ORDER BY d.next_attempt_at
                LIMIT $1"#,
         )
@@ -1374,6 +1397,7 @@ impl Database {
                     },
                     payload: row.get("payload"),
                     channel: NotificationChannel {
+                        owner_api_key_id: row.get("owner_api_key_id"),
                         id: row.get("c_id"),
                         name: row.get("c_name"),
                         channel_type,
@@ -1421,14 +1445,16 @@ impl Database {
     pub async fn list_notification_deliveries(
         &self,
         limit: i64,
+        owner: i64,
     ) -> Result<Vec<NotificationDelivery>> {
         let rows = sqlx::query(
             r#"SELECT id, alert_id, channel_id, channel_name, event_type, status,
                       attempt_count, response_status, error_message, created_at, delivered_at,
                       next_attempt_at, last_attempt_at, max_attempts
-               FROM notification_deliveries ORDER BY created_at DESC LIMIT $1"#,
+               FROM notification_deliveries WHERE owner_api_key_id = $2 ORDER BY created_at DESC LIMIT $1"#,
         )
         .bind(limit)
+        .bind(owner)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows

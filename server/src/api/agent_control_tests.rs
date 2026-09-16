@@ -183,6 +183,10 @@ async fn reliable_delivery_control_plane() {
         .unwrap();
     let mut other_headers = HeaderMap::new();
     other_headers.insert("X-API-Key", other.key.parse().unwrap());
+    let rule_id =
+        verify_enterprise_alerting(&state, &headers, &other_headers, &admin_headers, &payload)
+            .await;
+    verify_synthetic_monitoring(&state, &headers, &other_headers).await;
     assert!(status(
         State(state.clone()),
         other_headers.clone(),
@@ -190,11 +194,13 @@ async fn reliable_delivery_control_plane() {
     )
     .await
     .is_err());
-    assert!(
-        rotate(State(state.clone()), other_headers, Path(id.clone()))
-            .await
-            .is_err()
-    );
+    assert!(rotate(
+        State(state.clone()),
+        other_headers.clone(),
+        Path(id.clone())
+    )
+    .await
+    .is_err());
     let Json(rotation) = rotate(State(state.clone()), headers.clone(), Path(id.clone()))
         .await
         .unwrap();
@@ -214,6 +220,43 @@ async fn reliable_delivery_control_plane() {
         .await
         .unwrap();
     assert!(auth.validate_api_key(key).await.unwrap().is_none());
+    let Json(rotated_rules) = list_alert_rules(State(state.clone()), new_headers.clone())
+        .await
+        .unwrap();
+    assert!(
+        rotated_rules.rules.iter().any(|rule| rule.id == rule_id),
+        "rotation lost enterprise rule ownership"
+    );
+    let Json(rotated_channels) =
+        list_notification_channels(State(state.clone()), new_headers.clone())
+            .await
+            .unwrap();
+    assert_eq!(
+        rotated_channels.len(),
+        1,
+        "rotation lost notification channels"
+    );
+    let Json(rotated_deliveries) = list_notification_deliveries(
+        State(state.clone()),
+        new_headers.clone(),
+        Query(DeliveryQuery { limit: Some(100) }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !rotated_deliveries.is_empty(),
+        "rotation lost delivery history"
+    );
+    let persisted = db.get_alert_rule(&rule_id).await.unwrap().unwrap();
+    assert_eq!(
+        persisted.owner_api_key_id,
+        rotated_rules
+            .rules
+            .iter()
+            .find(|rule| rule.id == rule_id)
+            .unwrap()
+            .owner_api_key_id
+    );
     assert!(
         status(State(state.clone()), new_headers.clone(), Path(id.clone()))
             .await
@@ -317,4 +360,390 @@ async fn reliable_delivery_control_plane() {
         .execute(db.pool())
         .await
         .unwrap();
+}
+
+async fn verify_synthetic_monitoring(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    other: &HeaderMap,
+) {
+    let Json(channels) = list_notification_channels(State(state.clone()), headers.clone())
+        .await
+        .unwrap();
+    let spec=serde_json::from_value::<crate::synthetic::CheckSpec>(serde_json::json!({"name":"API health","kind":"http","target":"https://example.com/health","channels":[channels[0].id]})).unwrap();
+    let _ = super::synthetic::create(State(state.clone()), headers.clone(), Json(spec))
+        .await
+        .unwrap();
+    let Json(checks) = super::synthetic::list(State(state.clone()), headers.clone())
+        .await
+        .unwrap();
+    let id = checks[0]["id"].as_str().unwrap();
+    let agent = checks[0]["agent_id"].as_str().unwrap();
+    assert!(super::synthetic::history(
+        State(state.clone()),
+        other.clone(),
+        Path(id.into()),
+        Query(DeliveryQuery { limit: None })
+    )
+    .await
+    .is_err());
+    assert!(super::synthetic::set_enabled(
+        State(state.clone()),
+        other.clone(),
+        Path(id.into()),
+        Json(SetEnabledRequest { enabled: false })
+    )
+    .await
+    .is_err());
+    assert!(
+        super::synthetic::delete(State(state.clone()), other.clone(), Path(id.into()))
+            .await
+            .is_err()
+    );
+    let db = database(state).unwrap();
+    let mut result = crate::synthetic::ProbeResult {
+        checked_at: Utc::now(),
+        success: false,
+        response_time_ms: 12.0,
+        status_code: Some(503),
+        content_matched: None,
+        resolved_addresses: vec!["93.184.215.14".into()],
+        tls_expires_at: None,
+        tls_days_remaining: None,
+        error: Some("HTTP returned 503; expected 200".into()),
+    };
+    for attempt in 1..=4 {
+        let lease = format!("test-{attempt}");
+        sqlx::query("UPDATE synthetic_checks SET lease_token=$2 WHERE id=$1")
+            .bind(id)
+            .bind(&lease)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        crate::synthetic::finish(state, id, &lease, &result)
+            .await
+            .unwrap();
+        crate::synthetic::finish(state, id, &lease, &result)
+            .await
+            .unwrap();
+    }
+    let Json(history) = super::synthetic::history(
+        State(state.clone()),
+        headers.clone(),
+        Path(id.into()),
+        Query(DeliveryQuery { limit: None }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(history.len(), 4, "stale leases duplicated history");
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM alerts WHERE agent_id=$1")
+        .bind(agent)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 1,
+        "consecutive failures produced duplicate incidents"
+    );
+    let Json(alerts) = list_alerts(State(state.clone()), headers.clone())
+        .await
+        .unwrap();
+    let alert = alerts
+        .active_alerts
+        .iter()
+        .find(|alert| alert.agent_id == agent)
+        .unwrap();
+    let alert_id = alert.id.clone();
+    let Json(other_alerts) = list_alerts(State(state.clone()), other.clone())
+        .await
+        .unwrap();
+    assert!(!other_alerts
+        .active_alerts
+        .iter()
+        .any(|alert| alert.id == alert_id));
+    result.success = true;
+    result.error = None;
+    result.status_code = Some(200);
+    sqlx::query("UPDATE synthetic_checks SET lease_token='recovery' WHERE id=$1")
+        .bind(id)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    crate::synthetic::finish(state, id, "recovery", &result)
+        .await
+        .unwrap();
+    let recovered = db.get_alert(&alert_id).await.unwrap().unwrap();
+    assert_eq!(recovered.state, crate::alerts::AlertState::Resolved);
+    let delivery_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM notification_deliveries WHERE alert_id=$1")
+            .bind(&alert_id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        delivery_count, 2,
+        "firing/recovery outbox was not atomic and exactly once"
+    );
+    let Json(timeline) = list_incident_timeline(
+        State(state.clone()),
+        headers.clone(),
+        Query(IncidentQuery {
+            agent_id: Some(agent.into()),
+            limit: None,
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(timeline.iter().any(|event| event.event_type == "recovery"));
+    let _ = super::synthetic::delete(State(state.clone()), headers.clone(), Path(id.into()))
+        .await
+        .unwrap();
+    let Json(history) = super::synthetic::history(
+        State(state.clone()),
+        headers.clone(),
+        Path(id.into()),
+        Query(DeliveryQuery { limit: None }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        history.len(),
+        5,
+        "deletion discarded history instead of retaining it"
+    );
+}
+
+async fn verify_enterprise_alerting(
+    state: &Arc<AppState>,
+    headers: &HeaderMap,
+    other_headers: &HeaderMap,
+    admin_headers: &HeaderMap,
+    payload: &MetricsPayload,
+) -> String {
+    let owner = require_tenant(state, headers).await.unwrap();
+    let other_owner = require_tenant(state, other_headers).await.unwrap();
+    let other_agent = format!("other-{}", payload.agent_id);
+    let db = database(state).unwrap();
+    db.register_agent(&other_agent, Some(other_owner), None, None, None)
+        .await
+        .unwrap();
+    state.store.insert_metrics(payload.clone());
+    let mut other_payload = payload.clone();
+    other_payload.agent_id = other_agent.clone();
+    state.store.insert_metrics(other_payload);
+    let rule_request = || {
+        serde_json::from_value::<crate::alerts::CreateAlertRuleRequest>(serde_json::json!({
+            "name": "Enterprise CPU", "metric": "cpu_usage", "condition": "greater_than",
+            "threshold": 10, "duration_seconds": 0, "severity": "warning", "channels": [],
+            "cooldown_seconds": 300
+        }))
+        .unwrap()
+    };
+    assert!(create_alert_rule(
+        State(state.clone()),
+        admin_headers.clone(),
+        Json(rule_request())
+    )
+    .await
+    .is_err());
+    let Json(rule) = create_alert_rule(State(state.clone()), headers.clone(), Json(rule_request()))
+        .await
+        .unwrap();
+    assert_eq!(rule.owner_api_key_id, Some(owner));
+    let mut request = rule_request();
+    request.agent_filter = Some(other_agent.clone());
+    assert!(
+        create_alert_rule(State(state.clone()), headers.clone(), Json(request))
+            .await
+            .is_err()
+    );
+    assert!(get_alert_rule(
+        State(state.clone()),
+        other_headers.clone(),
+        Path(rule.id.clone())
+    )
+    .await
+    .is_err());
+    let update = || {
+        serde_json::from_value::<crate::alerts::UpdateAlertRuleRequest>(
+            serde_json::json!({"threshold": 20}),
+        )
+        .unwrap()
+    };
+    let Json(updated) = update_alert_rule(
+        State(state.clone()),
+        headers.clone(),
+        Path(rule.id.clone()),
+        Json(update()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated.threshold, 20.0);
+    assert_eq!(
+        db.get_alert_rule(&rule.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .threshold,
+        20.0
+    );
+    let Json(toggled) =
+        toggle_alert_rule(State(state.clone()), headers.clone(), Path(rule.id.clone()))
+            .await
+            .unwrap();
+    assert!(!toggled.enabled);
+    assert!(!db.get_alert_rule(&rule.id).await.unwrap().unwrap().enabled);
+    let _ = toggle_alert_rule(State(state.clone()), headers.clone(), Path(rule.id.clone()))
+        .await
+        .unwrap();
+    assert!(update_alert_rule(
+        State(state.clone()),
+        other_headers.clone(),
+        Path(rule.id.clone()),
+        Json(update())
+    )
+    .await
+    .is_err());
+    assert!(toggle_alert_rule(
+        State(state.clone()),
+        other_headers.clone(),
+        Path(rule.id.clone())
+    )
+    .await
+    .is_err());
+    assert!(delete_alert_rule(
+        State(state.clone()),
+        other_headers.clone(),
+        Path(rule.id.clone())
+    )
+    .await
+    .is_err());
+    let Json(other_rules) = list_alert_rules(State(state.clone()), other_headers.clone())
+        .await
+        .unwrap();
+    assert!(other_rules.rules.is_empty());
+    let Json(effective) = list_effective_alert_rules(
+        State(state.clone()),
+        other_headers.clone(),
+        Query(EffectiveRulesQuery {
+            agent_id: other_agent.clone(),
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        effective.rules.is_empty(),
+        "tenant-wide rule leaked into another enterprise's chart thresholds"
+    );
+    let transitions = state.alert_manager.evaluate_alerts(300).await;
+    let transition = transitions
+        .iter()
+        .find(|transition| transition.alert.rule_id == rule.id)
+        .unwrap();
+    assert_eq!(transition.alert.agent_id, payload.agent_id);
+    assert!(!transitions
+        .iter()
+        .any(|transition| transition.alert.rule_id == rule.id
+            && transition.alert.agent_id == other_agent));
+
+    let channel_request = || {
+        serde_json::from_value::<crate::alerts::CreateNotificationChannelRequest>(serde_json::json!({
+        "name": "Enterprise webhook", "channel_type": "generic_webhook", "webhook_url": "https://example.com/hook"
+    })).unwrap()
+    };
+    let Json(channel) = create_notification_channel(
+        State(state.clone()),
+        headers.clone(),
+        Json(channel_request()),
+    )
+    .await
+    .unwrap();
+    let Json(other_channel) = create_notification_channel(
+        State(state.clone()),
+        other_headers.clone(),
+        Json(channel_request()),
+    )
+    .await
+    .unwrap();
+    assert!(test_notification_channel(
+        State(state.clone()),
+        other_headers.clone(),
+        Path(channel.id.clone())
+    )
+    .await
+    .is_err());
+    assert!(delete_notification_channel(
+        State(state.clone()),
+        other_headers.clone(),
+        Path(channel.id.clone())
+    )
+    .await
+    .is_err());
+    let mut request = rule_request();
+    request.channels = vec![other_channel.id.clone()];
+    assert!(
+        create_alert_rule(State(state.clone()), headers.clone(), Json(request))
+            .await
+            .is_err()
+    );
+    let Json(channels) = list_notification_channels(State(state.clone()), headers.clone())
+        .await
+        .unwrap();
+    assert_eq!(channels.len(), 1);
+    assert_eq!(channels[0].id, channel.id);
+    let dispatcher = crate::alerts::notifications::NotificationDispatcher::new(db.clone()).unwrap();
+    let mut offline = transition.clone();
+    offline.alert.rule_id = "system-agent-offline".into();
+    offline.channel_ids.clear();
+    assert_eq!(
+        dispatcher.enqueue_transition(&offline).await.unwrap(),
+        1,
+        "offline alert routed across tenant boundaries"
+    );
+    let Json(deliveries) = list_notification_deliveries(
+        State(state.clone()),
+        headers.clone(),
+        Query(DeliveryQuery { limit: Some(100) }),
+    )
+    .await
+    .unwrap();
+    assert!(deliveries
+        .iter()
+        .any(|delivery| delivery.channel_id.as_deref() == Some(&channel.id)));
+    let Json(other_deliveries) = list_notification_deliveries(
+        State(state.clone()),
+        other_headers.clone(),
+        Query(DeliveryQuery { limit: Some(100) }),
+    )
+    .await
+    .unwrap();
+    assert!(other_deliveries.is_empty());
+    let silence_request = serde_json::from_value::<crate::alerts::CreateAlertSilenceRequest>(serde_json::json!({
+        "name": "Tenant-wide maintenance", "starts_at": Utc::now() - chrono::Duration::seconds(1),
+        "ends_at": Utc::now() + chrono::Duration::hours(1), "created_by": "forged-admin"
+    })).unwrap();
+    let Json(silence) =
+        create_alert_silence(State(state.clone()), headers.clone(), Json(silence_request))
+            .await
+            .unwrap();
+    assert_eq!(silence.created_by, format!("enterprise-key-{owner}"));
+    assert!(db
+        .is_alert_silenced("system-agent-offline", &payload.agent_id)
+        .await
+        .unwrap());
+    assert!(!db
+        .is_alert_silenced("system-agent-offline", &other_agent)
+        .await
+        .unwrap());
+    assert!(delete_alert_silence(
+        State(state.clone()),
+        other_headers.clone(),
+        Path(silence.id.clone())
+    )
+    .await
+    .is_err());
+    delete_alert_silence(State(state.clone()), headers.clone(), Path(silence.id))
+        .await
+        .unwrap();
+    rule.id
 }

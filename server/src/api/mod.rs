@@ -23,6 +23,7 @@ use crate::storage::{Agent, DataPoint, MetricsPayload, StorageStats, TimeSeriesS
 use crate::websocket::{WebSocketManager, WsMessage};
 
 const MAX_AGENT_ID_LEN: usize = 128;
+pub mod synthetic;
 const MAX_METRICS_PER_PAYLOAD: usize = 512;
 const MAX_METRIC_NAME_LEN: usize = 128;
 const MAX_PROCESSES_PER_PAYLOAD: usize = 256;
@@ -37,6 +38,9 @@ const MAX_LOG_SOURCE_LEN: usize = 512;
 const MAX_LOG_MESSAGE_LEN: usize = 16_384;
 
 fn validate_metrics_payload(payload: &MetricsPayload) -> Result<(), ApiError> {
+    if payload.agent_id.starts_with("synthetic:") {
+        return Err(ApiError::BadRequest("Reserved agent identifier".into()));
+    }
     if payload.delivery.as_ref().is_some_and(|delivery| {
         delivery.stream_id.len() != 32
             || !delivery
@@ -165,6 +169,9 @@ fn validate_metrics_payload(payload: &MetricsPayload) -> Result<(), ApiError> {
 }
 
 fn validate_logs_payload(payload: &crate::storage::LogsPayload) -> Result<(), ApiError> {
+    if payload.agent_id.starts_with("synthetic:") {
+        return Err(ApiError::BadRequest("Reserved agent identifier".into()));
+    }
     if payload.delivery.as_ref().is_some_and(|delivery| {
         delivery.stream_id.len() != 32
             || !delivery
@@ -1020,9 +1027,21 @@ pub async fn create_alert_rule(
     headers: HeaderMap,
     Json(payload): Json<crate::alerts::CreateAlertRuleRequest>,
 ) -> Result<Json<crate::alerts::AlertRule>, ApiError> {
-    require_admin(&state, &headers).await?;
-    info!("Creating new alert rule: {}", payload.name);
-    let rule = state.alert_manager.create_rule(payload).await;
+    let owner = require_tenant(&state, &headers).await?;
+    if let Some(agent) = &payload.agent_filter {
+        ensure_agent_access(&state, &headers, agent).await?;
+    }
+    validate_owned_channels(&state, owner, &payload.channels).await?;
+    if payload.name.trim().is_empty() || !payload.threshold.is_finite() {
+        return Err(ApiError::BadRequest(
+            "A name and finite threshold are required".into(),
+        ));
+    }
+    let rule = state
+        .alert_manager
+        .create_rule(payload, owner)
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?;
     Ok(Json(rule))
 }
 
@@ -1031,8 +1050,14 @@ pub async fn list_alert_rules(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<crate::alerts::AlertRulesResponse>, ApiError> {
-    require_admin(&state, &headers).await?;
-    let rules = state.alert_manager.list_rules().await;
+    let owner = require_tenant(&state, &headers).await?;
+    let rules = state
+        .alert_manager
+        .list_rules()
+        .await
+        .into_iter()
+        .filter(|rule| rule.owner_api_key_id == Some(owner))
+        .collect::<Vec<_>>();
     let total = rules.len();
     Ok(Json(crate::alerts::AlertRulesResponse { rules, total }))
 }
@@ -1049,12 +1074,19 @@ pub async fn list_effective_alert_rules(
     Query(query): Query<EffectiveRulesQuery>,
 ) -> Result<Json<crate::alerts::AlertRulesResponse>, ApiError> {
     ensure_agent_access(&state, &headers, &query.agent_id).await?;
+    let owner = database(&state)?
+        .agent_owners()
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?
+        .get(&query.agent_id)
+        .copied();
     let rules: Vec<_> = state
         .alert_manager
         .list_rules()
         .await
         .into_iter()
         .filter(|rule| rule.enabled)
+        .filter(|rule| owner.is_some() && rule.owner_api_key_id == owner)
         .filter(|rule| {
             rule.agent_filter
                 .as_deref()
@@ -1071,13 +1103,8 @@ pub async fn get_alert_rule(
     headers: HeaderMap,
     Path(rule_id): Path<String>,
 ) -> Result<Json<crate::alerts::AlertRule>, ApiError> {
-    require_admin(&state, &headers).await?;
-    state
-        .alert_manager
-        .get_rule(&rule_id)
-        .await
-        .map(Json)
-        .ok_or_else(|| ApiError::BadRequest(format!("Alert rule {} not found", rule_id)))
+    let owner = require_tenant(&state, &headers).await?;
+    Ok(Json(owned_rule(&state, owner, &rule_id).await?))
 }
 
 /// PUT /api/v1/alert-rules/:id - Update alert rule
@@ -1087,12 +1114,22 @@ pub async fn update_alert_rule(
     Path(rule_id): Path<String>,
     Json(payload): Json<crate::alerts::UpdateAlertRuleRequest>,
 ) -> Result<Json<crate::alerts::AlertRule>, ApiError> {
-    require_admin(&state, &headers).await?;
-    info!("Updating alert rule: {}", rule_id);
+    let owner = require_tenant(&state, &headers).await?;
+    owned_rule(&state, owner, &rule_id).await?;
+    if let Some(channels) = &payload.channels {
+        validate_owned_channels(&state, owner, channels).await?;
+    }
+    if payload
+        .threshold
+        .is_some_and(|threshold| !threshold.is_finite())
+    {
+        return Err(ApiError::BadRequest("Threshold must be finite".into()));
+    }
     state
         .alert_manager
         .update_rule(&rule_id, payload)
         .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?
         .map(Json)
         .ok_or_else(|| ApiError::BadRequest(format!("Alert rule {} not found", rule_id)))
 }
@@ -1103,9 +1140,14 @@ pub async fn delete_alert_rule(
     headers: HeaderMap,
     Path(rule_id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_admin(&state, &headers).await?;
-    info!("Deleting alert rule: {}", rule_id);
-    if state.alert_manager.delete_rule(&rule_id).await {
+    let owner = require_tenant(&state, &headers).await?;
+    owned_rule(&state, owner, &rule_id).await?;
+    if state
+        .alert_manager
+        .delete_rule(&rule_id)
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?
+    {
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::BadRequest(format!(
@@ -1121,12 +1163,13 @@ pub async fn toggle_alert_rule(
     headers: HeaderMap,
     Path(rule_id): Path<String>,
 ) -> Result<Json<crate::alerts::AlertRule>, ApiError> {
-    require_admin(&state, &headers).await?;
-    info!("Toggling alert rule: {}", rule_id);
+    let owner = require_tenant(&state, &headers).await?;
+    owned_rule(&state, owner, &rule_id).await?;
     state
         .alert_manager
         .toggle_rule(&rule_id)
         .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?
         .map(Json)
         .ok_or_else(|| ApiError::BadRequest(format!("Alert rule {} not found", rule_id)))
 }
@@ -1188,6 +1231,7 @@ pub async fn acknowledge_alert(
     Path(alert_id): Path<String>,
     Json(_payload): Json<crate::alerts::AcknowledgeAlertRequest>,
 ) -> Result<Json<crate::alerts::Alert>, ApiError> {
+    require_tenant(&state, &headers).await?;
     let alert = state
         .alert_manager
         .get_alert(&alert_id)
@@ -1233,7 +1277,7 @@ pub async fn create_notification_channel(
     headers: HeaderMap,
     Json(payload): Json<crate::alerts::CreateNotificationChannelRequest>,
 ) -> Result<Json<crate::alerts::NotificationChannelView>, ApiError> {
-    require_admin(&state, &headers).await?;
+    let owner = require_tenant(&state, &headers).await?;
     if payload.name.trim().is_empty() {
         return Err(ApiError::BadRequest("Channel name is required".to_string()));
     }
@@ -1255,8 +1299,19 @@ pub async fn create_notification_channel(
             "Email recipient, SMTP host, and sender are required".to_string(),
         ));
     }
+    if matches!(
+        payload.channel_type,
+        crate::alerts::NotificationChannelType::Email
+    ) {
+        crate::alerts::notifications::validate_smtp_settings(
+            payload.smtp_host.as_deref().unwrap_or(""),
+            payload.smtp_port,
+            payload.smtp_tls,
+        )
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    }
     let channel = database(&state)?
-        .create_notification_channel(&payload)
+        .create_notification_channel(&payload, owner)
         .await
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     Ok(Json((&channel).into()))
@@ -1266,12 +1321,18 @@ pub async fn list_notification_channels(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<crate::alerts::NotificationChannelView>>, ApiError> {
-    require_admin(&state, &headers).await?;
+    let owner = require_tenant(&state, &headers).await?;
     let channels = database(&state)?
         .list_notification_channels()
         .await
         .map_err(|error| ApiError::InternalError(error.to_string()))?;
-    Ok(Json(channels.iter().map(Into::into).collect()))
+    Ok(Json(
+        channels
+            .iter()
+            .filter(|channel| channel.owner_api_key_id == Some(owner))
+            .map(Into::into)
+            .collect(),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1285,7 +1346,8 @@ pub async fn set_notification_channel_enabled(
     Path(id): Path<String>,
     Json(payload): Json<SetEnabledRequest>,
 ) -> Result<StatusCode, ApiError> {
-    require_admin(&state, &headers).await?;
+    let owner = require_tenant(&state, &headers).await?;
+    owned_channel(&state, owner, &id).await?;
     if database(&state)?
         .set_notification_channel_enabled(&id, payload.enabled)
         .await
@@ -1304,7 +1366,8 @@ pub async fn delete_notification_channel(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_admin(&state, &headers).await?;
+    let owner = require_tenant(&state, &headers).await?;
+    owned_channel(&state, owner, &id).await?;
     if database(&state)?
         .delete_notification_channel(&id)
         .await
@@ -1323,7 +1386,8 @@ pub async fn test_notification_channel(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    require_admin(&state, &headers).await?;
+    let owner = require_tenant(&state, &headers).await?;
+    owned_channel(&state, owner, &id).await?;
     let db = database(&state)?;
     let channel = db
         .get_notification_channel(&id)
@@ -1352,9 +1416,9 @@ pub async fn list_notification_deliveries(
     headers: HeaderMap,
     Query(query): Query<DeliveryQuery>,
 ) -> Result<Json<Vec<crate::alerts::NotificationDelivery>>, ApiError> {
-    require_admin(&state, &headers).await?;
+    let owner = require_tenant(&state, &headers).await?;
     let deliveries = database(&state)?
-        .list_notification_deliveries(query.limit.unwrap_or(100).clamp(1, 500))
+        .list_notification_deliveries(query.limit.unwrap_or(100).clamp(1, 500), owner)
         .await
         .map_err(|error| ApiError::InternalError(error.to_string()))?;
     Ok(Json(deliveries))
@@ -1370,13 +1434,19 @@ pub async fn create_alert_silence(
             "Silence end must be after its start".to_string(),
         ));
     }
-    let admin = require_admin(&state, &headers).await?;
+    let owner = require_tenant(&state, &headers).await?;
+    if let Some(rule) = &payload.rule_id {
+        owned_rule(&state, owner, rule).await?;
+    }
+    if let Some(agent) = &payload.agent_id {
+        ensure_agent_access(&state, &headers, agent).await?;
+    }
     let payload = crate::alerts::CreateAlertSilenceRequest {
-        created_by: admin.username,
+        created_by: format!("enterprise-key-{owner}"),
         ..payload
     };
     let silence = database(&state)?
-        .create_alert_silence(&payload)
+        .create_alert_silence(&payload, owner)
         .await
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     Ok(Json(silence))
@@ -1393,12 +1463,17 @@ pub async fn list_alert_silences(
     headers: HeaderMap,
     Query(query): Query<SilencesQuery>,
 ) -> Result<Json<Vec<crate::alerts::AlertSilence>>, ApiError> {
-    require_admin(&state, &headers).await?;
+    let owner = require_tenant(&state, &headers).await?;
     let silences = database(&state)?
         .list_alert_silences(query.active_only)
         .await
         .map_err(|error| ApiError::InternalError(error.to_string()))?;
-    Ok(Json(silences))
+    Ok(Json(
+        silences
+            .into_iter()
+            .filter(|silence| silence.owner_api_key_id == Some(owner))
+            .collect(),
+    ))
 }
 
 pub async fn delete_alert_silence(
@@ -1406,7 +1481,18 @@ pub async fn delete_alert_silence(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    require_admin(&state, &headers).await?;
+    let owner = require_tenant(&state, &headers).await?;
+    let owned = database(&state)?
+        .list_alert_silences(false)
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?
+        .into_iter()
+        .any(|silence| silence.id == id && silence.owner_api_key_id == Some(owner));
+    if !owned {
+        return Err(ApiError::Forbidden(
+            "Silence is not owned by this enterprise key".into(),
+        ));
+    }
     if database(&state)?
         .delete_alert_silence(&id)
         .await
@@ -1958,6 +2044,57 @@ async fn ensure_agent_access(
             }
         }
     }
+}
+
+async fn require_tenant(state: &AppState, headers: &HeaderMap) -> Result<i64, ApiError> {
+    match request_principal(state, headers).await? {
+        RequestPrincipal::ApiKey(id) => Ok(id),
+        RequestPrincipal::Admin(_) => Err(ApiError::Forbidden(
+            "Sign in with an enterprise API key to manage enterprise alerting".into(),
+        )),
+    }
+}
+
+async fn owned_rule(
+    state: &AppState,
+    owner: i64,
+    id: &str,
+) -> Result<crate::alerts::AlertRule, ApiError> {
+    state
+        .alert_manager
+        .get_rule(id)
+        .await
+        .filter(|rule| rule.owner_api_key_id == Some(owner))
+        .ok_or_else(|| ApiError::Forbidden("Rule is not owned by this enterprise key".into()))
+}
+
+async fn owned_channel(
+    state: &AppState,
+    owner: i64,
+    id: &str,
+) -> Result<crate::alerts::NotificationChannel, ApiError> {
+    database(state)?
+        .get_notification_channel(id)
+        .await
+        .map_err(|error| ApiError::InternalError(error.to_string()))?
+        .filter(|channel| channel.owner_api_key_id == Some(owner))
+        .ok_or_else(|| ApiError::Forbidden("Channel is not owned by this enterprise key".into()))
+}
+
+async fn validate_owned_channels(
+    state: &AppState,
+    owner: i64,
+    channels: &[String],
+) -> Result<(), ApiError> {
+    if channels.len() > 64 {
+        return Err(ApiError::BadRequest(
+            "At most 64 notification channels are allowed".into(),
+        ));
+    }
+    for id in channels {
+        owned_channel(state, owner, id).await?;
+    }
+    Ok(())
 }
 
 async fn require_admin(state: &AppState, headers: &HeaderMap) -> Result<AdminUser, ApiError> {

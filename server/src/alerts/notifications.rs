@@ -2,8 +2,12 @@ use std::{net::IpAddr, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
 use lettre::{
-    message::Mailbox, transport::smtp::authentication::Credentials, AsyncSmtpTransport,
-    AsyncTransport, Message, Tokio1Executor,
+    message::Mailbox,
+    transport::smtp::{
+        authentication::Credentials,
+        client::{Tls, TlsParameters},
+    },
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 use reqwest::{redirect::Policy, Client, Url};
 use serde_json::{json, Value};
@@ -15,17 +19,11 @@ use crate::db::Database;
 #[derive(Clone)]
 pub struct NotificationDispatcher {
     database: Arc<Database>,
-    http: Client,
 }
 
 impl NotificationDispatcher {
     pub fn new(database: Arc<Database>) -> Result<Self> {
-        let http = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .redirect(Policy::none())
-            .user_agent("WatchTower/0.1 alert-delivery")
-            .build()?;
-        Ok(Self { database, http })
+        Ok(Self { database })
     }
 
     pub async fn enqueue_transition(&self, transition: &AlertTransition) -> Result<usize> {
@@ -39,7 +37,15 @@ impl NotificationDispatcher {
         }
 
         let mut channels = self.database.list_notification_channels().await?;
-        channels.retain(|channel| channel.enabled);
+        let owner = self
+            .database
+            .agent_owners()
+            .await?
+            .get(&transition.alert.agent_id)
+            .copied();
+        channels.retain(|channel| {
+            channel.enabled && owner.is_some() && channel.owner_api_key_id == owner
+        });
         if !transition.channel_ids.is_empty() {
             channels.retain(|channel| transition.channel_ids.contains(&channel.id));
         } else if transition.alert.rule_id != "system-agent-offline" {
@@ -142,7 +148,18 @@ impl NotificationDispatcher {
             }),
             _ => payload.clone(),
         };
-        let response = self.http.post(url).json(&body).send().await?;
+        let parsed = Url::parse(url)?;
+        let host = parsed.host_str().context("Webhook host missing")?;
+        let addresses =
+            public_addresses(host, parsed.port_or_known_default().unwrap_or(443)).await?;
+        let client = Client::builder()
+            .timeout(Duration::from_secs(10))
+            .redirect(Policy::none())
+            .no_proxy()
+            .resolve_to_addrs(host, &addresses)
+            .user_agent("WatchTower/0.1 alert-delivery")
+            .build()?;
+        let response = client.post(url).json(&body).send().await?;
         let status = response.status();
         if !status.is_success() {
             return Err(anyhow!("Webhook returned HTTP {}", status.as_u16()));
@@ -172,12 +189,18 @@ impl NotificationDispatcher {
             .subject(subject)
             .body(payload["message"].as_str().unwrap_or("").to_string())?;
 
-        let mut builder = if channel.smtp_tls {
-            AsyncSmtpTransport::<Tokio1Executor>::relay(smtp_host)?
-        } else {
-            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(smtp_host)
-        };
-        builder = builder.port(channel.smtp_port.clamp(1, 65535) as u16);
+        validate_smtp_settings(smtp_host, channel.smtp_port, channel.smtp_tls)?;
+        let addresses = public_addresses(smtp_host, channel.smtp_port as u16).await?;
+        let tls = TlsParameters::new(smtp_host.to_owned())?;
+        let mut builder =
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(addresses[0].ip().to_string())
+                .port(channel.smtp_port as u16)
+                .timeout(Some(Duration::from_secs(10)))
+                .tls(if channel.smtp_port == 465 {
+                    Tls::Wrapper(tls)
+                } else {
+                    Tls::Required(tls)
+                });
         if let (Some(username), Some(password)) = (&channel.smtp_username, &channel.smtp_password) {
             builder = builder.credentials(Credentials::new(username.clone(), password.clone()));
         }
@@ -186,7 +209,7 @@ impl NotificationDispatcher {
     }
 }
 
-fn alert_payload(transition: &AlertTransition) -> Value {
+pub(crate) fn alert_payload(transition: &AlertTransition) -> Value {
     let alert = &transition.alert;
     let title = match transition.event_type {
         AlertEventType::Resolved => {
@@ -230,7 +253,11 @@ pub fn validate_webhook_url(value: &str) -> Result<()> {
     if url.scheme() != "https" {
         return Err(anyhow!("Webhook URL must use HTTPS"));
     }
-    let host = url.host_str().context("Webhook URL has no host")?;
+    let host = url
+        .host_str()
+        .context("Webhook URL has no host")?
+        .trim_start_matches('[')
+        .trim_end_matches(']');
     if host.eq_ignore_ascii_case("localhost") || host.ends_with(".local") {
         return Err(anyhow!("Local webhook destinations are not allowed"));
     }
@@ -242,6 +269,33 @@ pub fn validate_webhook_url(value: &str) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_smtp_settings(host: &str, port: i32, tls: bool) -> Result<()> {
+    if !tls || !matches!(port, 465 | 587) || host.trim().is_empty() {
+        return Err(anyhow!("SMTP requires TLS on port 465 or 587"));
+    }
+    validate_webhook_url(&format!("https://{host}/"))?;
+    Ok(())
+}
+
+pub(crate) async fn public_addresses(host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>> {
+    let addresses: Vec<_> = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio::net::lookup_host((host, port)),
+    )
+    .await??
+    .collect();
+    if addresses.is_empty()
+        || addresses
+            .iter()
+            .any(|address| is_private_address(address.ip()))
+    {
+        return Err(anyhow!(
+            "Notification destination must resolve exclusively to public addresses"
+        ));
+    }
+    Ok(addresses)
+}
+
 fn is_private_address(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
@@ -250,12 +304,21 @@ fn is_private_address(ip: IpAddr) -> bool {
                 || ip.is_link_local()
                 || ip.is_broadcast()
                 || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_documentation()
+                || ip.octets()[0] == 0
+                || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
+                || ip.octets()[0] >= 240
         }
         IpAddr::V6(ip) => {
             ip.is_loopback()
                 || ip.is_unspecified()
                 || ip.is_unique_local()
                 || ip.is_unicast_link_local()
+                || ip.is_multicast()
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|ip| is_private_address(IpAddr::V4(ip)))
         }
     }
 }
@@ -272,6 +335,18 @@ mod tests {
     fn rejects_unsafe_webhook_destinations() {
         assert!(validate_webhook_url("http://example.com/hook").is_err());
         assert!(validate_webhook_url("https://127.0.0.1/hook").is_err());
+        assert!(validate_webhook_url("https://[::1]/hook").is_err());
+        assert!(validate_webhook_url("https://[::ffff:127.0.0.1]/hook").is_err());
+        assert!(validate_webhook_url("https://169.254.169.254/hook").is_err());
         assert!(validate_webhook_url("https://hooks.slack.com/services/test").is_ok());
+    }
+
+    #[test]
+    fn requires_secure_public_smtp_settings() {
+        assert!(validate_smtp_settings("smtp.example.com", 587, true).is_ok());
+        assert!(validate_smtp_settings("smtp.example.com", 465, true).is_ok());
+        assert!(validate_smtp_settings("smtp.example.com", 587, false).is_err());
+        assert!(validate_smtp_settings("smtp.example.com", 25, true).is_err());
+        assert!(validate_smtp_settings("127.0.0.1", 587, true).is_err());
     }
 }

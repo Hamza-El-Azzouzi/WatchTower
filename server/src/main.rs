@@ -6,6 +6,7 @@ mod config;
 mod db;
 mod middleware;
 mod storage;
+mod synthetic;
 mod websocket;
 
 use anyhow::Result;
@@ -274,9 +275,22 @@ async fn main() -> Result<()> {
         ws_manager.clone(),
         config.storage.persistence_interval_seconds,
     ));
+    tokio::spawn(synthetic::run(state.clone()));
 
     // Build router with protected routes (metrics/logs ingestion + dashboard read endpoints)
     let protected_routes = Router::new()
+        .route(
+            "/api/v1/synthetic-checks",
+            get(api::synthetic::list).post(api::synthetic::create),
+        )
+        .route(
+            "/api/v1/synthetic-checks/:id",
+            axum::routing::put(api::synthetic::set_enabled).delete(api::synthetic::delete),
+        )
+        .route(
+            "/api/v1/synthetic-checks/:id/history",
+            get(api::synthetic::history),
+        )
         // Agent write endpoints (metrics/logs ingestion)
         .route("/api/v1/metrics", post(api::ingest_metrics))
         .route("/api/v1/logs", post(api::ingest_logs))

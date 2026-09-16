@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { Activity, Home, Database, Zap, Bell, Shield, Key, LogOut, Users, Lock, FileText, Menu, X, ChevronRight } from 'lucide-react'
+import { Activity, Home, Database, Zap, Bell, Shield, Key, LogOut, Users, Lock, FileText, Menu, X, ChevronRight, Globe } from 'lucide-react'
 import { useEffect, useState, useCallback } from 'react'
 import { getAlerts } from '@/lib/alerts-api'
 import { useAlertsWebSocket } from '@/hooks/useWebSocket'
@@ -40,12 +40,12 @@ export function Sidebar() {
     { icon: Database, label: 'Databases', href: '/databases', id: 'databases' },
     { icon: FileText, label: 'Logs', href: '/logs', id: 'logs' },
     { icon: Zap, label: 'Performance', href: '/performance', id: 'performance' },
+    { icon: Globe, label: 'Synthetic checks', href: '/synthetic', id: 'synthetic' },
     { icon: Bell, label: 'Alerts', href: '/alerts', id: 'alerts', badge: alertCount },
   ]
   const adminItems = [
     { icon: Shield, label: 'Control center', href: '/admin', id: 'admin-overview' },
     { icon: Activity, label: 'Agents', href: '/admin/agents', id: 'admin-agents' },
-    { icon: Bell, label: 'Alerts', href: '/admin/alerts', id: 'admin-alerts' },
     { icon: Key, label: 'API keys', href: '/admin/api-keys', id: 'api-keys' },
     { icon: Users, label: 'Administrators', href: '/admin/users', id: 'manage-admins' },
     { icon: Lock, label: 'Security', href: '/admin/change-password', id: 'change-password' },

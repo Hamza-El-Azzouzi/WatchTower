@@ -32,6 +32,7 @@ Administrators must generate replacement keys after upgrading.
 - [x] Five-second evaluation cadence with rule duration and cooldown controls
 - [x] Correlated incident timeline for alert transitions, acknowledgements, process spikes, and error logs
 - [x] Dashboard threshold charts driven by enabled alert rules
+- [x] Enterprise-key ownership of rules, channels, delivery history, and maintenance
 
 ## 3. Agent Onboarding
 
@@ -71,3 +72,14 @@ Administrators must generate replacement keys after upgrading.
 - [ ] Metric and log exports
 - [ ] Administrative audit trail
 - [ ] Retention controls in the admin UI
+
+## 6. Synthetic Monitoring
+
+- [x] Tenant-owned HTTP/HTTPS GET checks with exact status and optional content validation
+- [x] Public TCP port and DNS A/AAAA checks with optional expected IP
+- [x] TLS validation and certificate-expiration warnings
+- [x] Bounded database-leased scheduler and consecutive-failure incident rules
+- [x] Atomic firing/recovery notification outbox and tenant silence support
+- [x] Latency/status history, chart, stale status, and pause/resume/delete controls
+- [ ] Multi-region probe agents and time-weighted availability/SLA reporting
+- [ ] Custom DNS resolvers, additional record types, and browser transaction checks

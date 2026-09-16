@@ -10,7 +10,8 @@ fn db_error(error: impl std::fmt::Display) -> ApiError {
     ApiError::InternalError("agent control operation failed".into())
 }
 fn valid_id(id: &str) -> Result<(), ApiError> {
-    if id.is_empty()
+    if id.starts_with("synthetic:")
+        || id.is_empty()
         || id.len() > 128
         || !id
             .bytes()
@@ -21,6 +22,7 @@ fn valid_id(id: &str) -> Result<(), ApiError> {
     Ok(())
 }
 async fn key_owner(state: &AppState, headers: &HeaderMap, id: &str) -> Result<i64, ApiError> {
+    valid_id(id)?;
     match request_principal(state, headers).await? {
         RequestPrincipal::ApiKey(key_id) => {
             ensure_agent_access(state, headers, id).await?;
@@ -188,11 +190,13 @@ pub async fn rotate(
         .fetch_one(&mut *tx)
         .await
         .map_err(db_error)?;
-    let agent_count: i64 = sqlx::query_scalar("SELECT count(*) FROM agents WHERE api_key_id=$1")
-        .bind(old_id)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(db_error)?;
+    let agent_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agents WHERE api_key_id=$1 AND agent_type != 'synthetic'",
+    )
+    .bind(old_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db_error)?;
     if agent_count != 1 {
         return Err(ApiError::BadRequest(
             "rotation requires a dedicated single-agent key".into(),
@@ -232,7 +236,34 @@ pub async fn confirm_rotation(
         .await
         .map_err(db_error)?;
     let rotation = sqlx::query("DELETE FROM agent_key_rotations WHERE agent_id=$1 AND new_key_id=$2 AND expires_at>now() RETURNING old_key_id").bind(&id).bind(key_id).fetch_optional(&mut *tx).await.map_err(db_error)?;
+    let old_owner = rotation
+        .as_ref()
+        .map(|rotation| rotation.get::<i64, _>("old_key_id"));
     if let Some(rotation) = rotation {
+        for table in [
+            "alert_rules",
+            "notification_channels",
+            "alert_silences",
+            "notification_deliveries",
+            "synthetic_checks",
+        ] {
+            sqlx::query(&format!(
+                "UPDATE {table} SET owner_api_key_id=$2 WHERE owner_api_key_id=$1"
+            ))
+            .bind(rotation.get::<i64, _>("old_key_id"))
+            .bind(key_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
+        }
+        sqlx::query(
+            "UPDATE agents SET api_key_id=$2 WHERE api_key_id=$1 AND agent_type='synthetic'",
+        )
+        .bind(rotation.get::<i64, _>("old_key_id"))
+        .bind(key_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
         sqlx::query("UPDATE agents SET api_key_id=$2 WHERE id=$1")
             .bind(&id)
             .bind(key_id)
@@ -264,6 +295,9 @@ pub async fn confirm_rotation(
         }
     }
     tx.commit().await.map_err(db_error)?;
+    if let Some(old) = old_owner {
+        state.alert_manager.transfer_owner(old, key_id).await;
+    }
     Ok(Json(serde_json::json!({"status":"confirmed"})))
 }
 

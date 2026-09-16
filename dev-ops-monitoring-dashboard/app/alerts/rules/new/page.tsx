@@ -257,11 +257,11 @@ export default function NewAlertRulePage() {
                     setForm({ ...form, agent_filter: event.target.value })
                   }
                   className={inputClass}
-                  placeholder="All accessible agents"
+                  placeholder="All agents owned by your API key"
                   aria-describedby="scope-help"
                 />
                 <p id="scope-help" className="mt-2 text-xs text-slate-500">
-                  Leave empty for all agents, or enter one exact agent ID.
+                  Leave empty for all agents owned by your enterprise API key, or enter one of your exact agent IDs.
                 </p>
               </div>
             </div>

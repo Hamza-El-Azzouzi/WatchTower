@@ -22,14 +22,14 @@ use crate::storage::{
 #[derive(Clone)]
 enum AccessScope {
     Admin,
-    Tenant(Vec<String>),
+    Tenant { key_id: i64, agent_ids: Vec<String> },
 }
 
 impl AccessScope {
     fn allows(&self, agent_id: &str) -> bool {
         match self {
             Self::Admin => true,
-            Self::Tenant(agent_ids) => agent_ids.iter().any(|id| id == agent_id),
+            Self::Tenant { agent_ids, .. } => agent_ids.iter().any(|id| id == agent_id),
         }
     }
 
@@ -81,7 +81,7 @@ async fn authenticate_socket(
         .get_agents_by_api_key(key_id)
         .await
         .ok()?;
-    Some(AccessScope::Tenant(agent_ids))
+    Some(AccessScope::Tenant { key_id, agent_ids })
 }
 
 // WebSocket message types
@@ -456,9 +456,16 @@ async fn handle_alerts_socket(mut socket: WebSocket, state: Arc<crate::api::AppS
                 msg = rx.recv() => {
                     match msg {
                         Ok(msg) => {
-                            if !scope.allows_message(&msg) {
-                                continue;
-                            }
+                            let allowed = match (&scope, &msg) {
+                                (AccessScope::Tenant { key_id, .. }, WsMessage::Alert { agent_id, .. }) => {
+                                    if let Some(db) = &state.database {
+                                        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM agents a JOIN api_keys k ON k.id=a.api_key_id WHERE a.id=$1 AND a.api_key_id=$2 AND NOT k.revoked AND (k.expires_at IS NULL OR k.expires_at>now()))")
+                                            .bind(agent_id).bind(key_id).fetch_one(db.pool()).await.unwrap_or(false)
+                                    } else { false }
+                                },
+                                _ => scope.allows_message(&msg),
+                            };
+                            if !allowed { continue; }
                             if let Ok(json) = serde_json::to_string(&msg) {
                                 if sender.send(Message::Text(json)).await.is_err() {
                                     break;

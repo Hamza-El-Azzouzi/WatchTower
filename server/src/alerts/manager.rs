@@ -69,8 +69,27 @@ impl AlertManager {
     }
 
     // Alert Rule Management
-    pub async fn create_rule(&self, req: CreateAlertRuleRequest) -> AlertRule {
+    pub async fn cache_persisted_alert(&self, alert: Alert) {
+        self.alerts_cache
+            .write()
+            .await
+            .insert(alert.id.clone(), alert);
+    }
+    pub async fn transfer_owner(&self, old: i64, new: i64) {
+        for rule in self.rules_cache.write().await.values_mut() {
+            if rule.owner_api_key_id == Some(old) {
+                rule.owner_api_key_id = Some(new);
+            }
+        }
+    }
+
+    pub async fn create_rule(
+        &self,
+        req: CreateAlertRuleRequest,
+        owner: i64,
+    ) -> anyhow::Result<AlertRule> {
         let rule = AlertRule {
+            owner_api_key_id: Some(owner),
             id: Uuid::new_v4().to_string(),
             name: req.name,
             description: req.description,
@@ -88,16 +107,12 @@ impl AlertManager {
         };
 
         // Save to database first
-        if let Err(e) = self.database.create_alert_rule(&rule).await {
-            error!("Failed to save alert rule to database: {}", e);
-        } else {
-            info!("Saved alert rule to database: {} ({})", rule.name, rule.id);
-        }
+        self.database.create_alert_rule(&rule).await?;
 
         // Update in-memory cache
         let mut rules = self.rules_cache.write().await;
         rules.insert(rule.id.clone(), rule.clone());
-        rule
+        Ok(rule)
     }
 
     pub async fn get_rule(&self, rule_id: &str) -> Option<AlertRule> {
@@ -133,10 +148,10 @@ impl AlertManager {
         &self,
         rule_id: &str,
         req: UpdateAlertRuleRequest,
-    ) -> Option<AlertRule> {
+    ) -> anyhow::Result<Option<AlertRule>> {
         let mut rules = self.rules_cache.write().await;
 
-        if let Some(rule) = rules.get_mut(rule_id) {
+        if let Some(mut rule) = rules.get(rule_id).cloned() {
             if let Some(name) = req.name {
                 rule.name = name;
             }
@@ -168,53 +183,42 @@ impl AlertManager {
                 rule.cooldown_seconds = cooldown;
             }
 
-            // Save to database
-            let updated_rule = rule.clone();
-            let db = self.database.clone();
-            tokio::spawn(async move {
-                if let Err(e) = db.update_alert_rule(&updated_rule).await {
-                    error!("Failed to update alert rule in database: {}", e);
-                }
-            });
-
-            Some(rule.clone())
+            self.database.update_alert_rule(&rule).await?;
+            rules.insert(rule_id.to_owned(), rule.clone());
+            Ok(Some(rule))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    pub async fn delete_rule(&self, rule_id: &str) -> bool {
-        // Delete from database first
-        if let Err(e) = self.database.delete_alert_rule(rule_id).await {
-            error!("Failed to delete alert rule from database: {}", e);
-        }
-
+    pub async fn delete_rule(&self, rule_id: &str) -> anyhow::Result<bool> {
         let mut rules = self.rules_cache.write().await;
-        rules.remove(rule_id).is_some()
+        self.database.delete_alert_rule(rule_id).await?;
+        Ok(rules.remove(rule_id).is_some())
     }
 
-    pub async fn toggle_rule(&self, rule_id: &str) -> Option<AlertRule> {
+    pub async fn toggle_rule(&self, rule_id: &str) -> anyhow::Result<Option<AlertRule>> {
         let mut rules = self.rules_cache.write().await;
-        if let Some(rule) = rules.get_mut(rule_id) {
+        if let Some(mut rule) = rules.get(rule_id).cloned() {
             rule.enabled = !rule.enabled;
-
-            // Save to database
-            let updated_rule = rule.clone();
-            let db = self.database.clone();
-            tokio::spawn(async move {
-                if let Err(e) = db.update_alert_rule(&updated_rule).await {
-                    error!("Failed to toggle alert rule in database: {}", e);
-                }
-            });
-
-            Some(rule.clone())
+            self.database.update_alert_rule(&rule).await?;
+            rules.insert(rule_id.to_owned(), rule.clone());
+            Ok(Some(rule))
         } else {
-            None
+            Ok(None)
         }
     }
 
     // Alert Evaluation
     pub async fn evaluate_alerts(&self, offline_after_seconds: u64) -> Vec<AlertTransition> {
+        // Resolve ownership before taking evaluation locks; fail closed on DB outage.
+        let owners = match self.database.agent_owners().await {
+            Ok(owners) => owners,
+            Err(error) => {
+                error!("Cannot verify tenant ownership for alert evaluation: {error}");
+                return Vec::new();
+            }
+        };
         let rules: Vec<AlertRule> = self.rules_cache.read().await.values().cloned().collect();
         let mut alerts = self.alerts_cache.write().await;
         let mut evaluations = self.evaluations.write().await;
@@ -227,6 +231,11 @@ impl AlertManager {
             }
 
             for agent in &agents {
+                if rule.owner_api_key_id.is_none()
+                    || owners.get(&agent.id).copied() != rule.owner_api_key_id
+                {
+                    continue;
+                }
                 // Apply agent filter if specified
                 if let Some(filter) = &rule.agent_filter {
                     if &agent.id != filter {

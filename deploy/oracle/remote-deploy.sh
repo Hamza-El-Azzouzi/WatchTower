@@ -65,6 +65,14 @@ export DOCKER_CONFIG="$docker_config_dir"
 printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin
 cd "$install_dir"
 docker compose --env-file .env -f compose.yml pull
+postgres_container="$(docker compose --env-file .env -f compose.yml ps -q postgres)"
+if [[ -n "$postgres_container" ]]; then
+  install -d -m 0700 "$install_dir/backups"
+  backup_path="$install_dir/backups/pre-deploy-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
+  docker exec "$postgres_container" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" | gzip > "$backup_path"
+  chmod 0600 "$backup_path"
+  echo "Database backup saved before migrations: $backup_path"
+fi
 docker compose --env-file .env -f compose.yml up -d --remove-orphans
 
 healthy=false

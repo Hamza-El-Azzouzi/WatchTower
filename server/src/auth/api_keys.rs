@@ -244,10 +244,12 @@ impl AuthService {
             let key_id: i64 = row.get("id");
 
             // Get agents using this key
-            let agent_rows = sqlx::query("SELECT id FROM agents WHERE api_key_id = $1")
-                .bind(key_id)
-                .fetch_all(&self.pool)
-                .await?;
+            let agent_rows = sqlx::query(
+                "SELECT id FROM agents WHERE api_key_id = $1 AND agent_type != 'synthetic'",
+            )
+            .bind(key_id)
+            .fetch_all(&self.pool)
+            .await?;
 
             let used_by_agents: Vec<String> = agent_rows.into_iter().map(|r| r.get("id")).collect();
 
@@ -329,7 +331,7 @@ impl AuthService {
                         if let Some(max) = max_agents {
                             // Count current agents using this key (excluding the current agent id)
                             let count_result = sqlx::query(
-                                "SELECT COUNT(*) as count FROM agents WHERE api_key_id = $1 AND id != $2"
+                                "SELECT COUNT(*) as count FROM agents WHERE api_key_id = $1 AND id != $2 AND agent_type != 'synthetic'"
                             )
                             .bind(key_id)
                             .bind(aid)

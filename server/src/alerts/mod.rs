@@ -6,6 +6,8 @@ pub mod notifications;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertRule {
+    #[serde(default)]
+    pub owner_api_key_id: Option<i64>,
     pub id: String,
     pub name: String,
     pub description: Option<String>,
@@ -150,6 +152,7 @@ impl NotificationChannelType {
 
 #[derive(Debug, Clone)]
 pub struct NotificationChannel {
+    pub owner_api_key_id: Option<i64>,
     pub id: String,
     pub name: String,
     pub channel_type: NotificationChannelType,
@@ -238,6 +241,8 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertSilence {
+    #[serde(default)]
+    pub owner_api_key_id: Option<i64>,
     pub id: String,
     pub name: String,
     pub reason: Option<String>,

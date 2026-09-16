@@ -113,3 +113,71 @@ enrollment response loss and manual signing-key deployment).
 The host page adds `AgentDeliveryPanel`; the Create Alert Rule page uses Lucide
 icons, labeled inputs, severity radio cards, validation, channel-state messaging,
 and a live policy preview. Remote process controls remain excluded.
+
+## Enterprise alert ownership
+
+Enterprise API keys are tenant credentials, not just read-only dashboard access.
+Their owners manage their own rules, alert acknowledgements, notification channels,
+delivery history, and silences/maintenance windows. Platform admin credentials manage
+keys and cannot mutate enterprise alerting policies. No payment system or additional
+enterprise admin panel is introduced.
+
+Migration `20260916000002_tenant_alerting.sql` adds persisted key ownership. All
+rule CRUD, chart thresholds, evaluation, notification routing (including offline
+alerts), and silences enforce that ownership. A rule without an agent filter means
+all agents belonging to its key, never all platform agents. Rule/channel names are unique
+within a tenant. Confirmed key rotation transfers policies, channels, silences,
+delivery history and the rule cache to the replacement key.
+
+Legacy rules with an exact agent filter inherit that agent's owner. Ambiguous
+global rules/channels remain stored but disabled and inaccessible until explicitly
+assigned by an operator; this migration does not guess tenant ownership. Customers
+can recreate those policies using their enterprise key. Existing channel credentials
+are never returned to browsers. Outbound webhook DNS is checked and pinned to public
+addresses, with redirects/proxies disabled. SMTP is pinned to a public destination
+with certificate validation and mandatory TLS on 465 or STARTTLS on 587.
+
+The disposable-database control-plane integration test exercises two tenants,
+cross-tenant access denials, threshold/evaluation isolation, channel references,
+offline routing, delivery history, silence isolation, and key-rotation persistence.
+
+## Priority 4: Synthetic monitoring
+
+`server/src/synthetic.rs` runs leased, durable HTTP/HTTPS, TCP, DNS A/AAAA, and
+TLS-certificate checks from the server's network vantage point. The dashboard
+adds `/synthetic` and an enterprise-only navigation entry, a validated creation
+form, pause/resume/delete controls, response-time chart, result/status history,
+certificate expiry, and explicit stale/pending/confirming states. Visible pages
+refresh every five seconds without overlapping polls; probe intervals are 30–3600s.
+
+Checks belong to API keys and use synthetic agent identities solely for existing
+alert/timeline authorization and foreign keys. They consume no host-agent quota,
+do not enter the host telemetry store, and cannot receive agent ingestion or
+control-plane writes. Dedicated-key rotation transfers their ownership. Each
+enterprise may configure 50 active monitors; eight bounded workers share database
+leases, use 1–10s total timeouts, and discard results from invalidated leases.
+
+Probe result, incident firing/recovery, timeline event and notification outbox
+commit atomically. Consecutive failures (1–10, default 3) open one critical incident;
+one success resolves it. Selected tenant channels receive firing and recovery via
+the existing retry/history worker. Tenant silences apply. Pausing does not pretend
+an outage recovered; deletion retires the incident and cancels pending deliveries.
+
+Results retain timestamps, latency, HTTP status, content-match outcome, public
+resolved addresses, expiry date/days and bounded failure reasons, never response
+bodies. Storage is capped at 10,000 results per check and 30 days. Deleted monitors
+remain tombstoned with history for 30 days before cleanup. HTTP checks are GET-only,
+follow no redirects, pin validated public DNS destinations, disable proxies and
+limit content validation to 256 KiB. TLS uses certificate-chain/hostname validation;
+the default expiry-warning threshold is 14 days. DNS checks use system resolution
+for A/AAAA, optionally validating an expected IP; custom resolvers/MX/TXT and
+multi-region/browser probes are not implemented.
+
+The disposable control-plane test also exercises synthetic history, stale-lease
+deduplication, tenant isolation, consecutive-failure incidents, atomic firing/
+recovery deliveries, timelines and tombstoned history. The explicitly enabled
+`public_probe_smoke_test` verifies all four real transports, content mismatches,
+status mismatches and rejection of the cloud metadata address without an SSRF
+test bypass. Oracle deployment now saves a root-only compressed PostgreSQL backup
+under `/opt/watchtower/backups` before startup migrations. Backup retention and
+operator-reviewed assignment of ambiguous legacy tenant policies remain manual.
