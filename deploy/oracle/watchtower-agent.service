@@ -1,6 +1,6 @@
 [Unit]
 Description=WatchTower host monitoring agent
-After=network-online.target docker.service watchtower-docker-telemetry.service
+After=network-online.target docker.service
 Wants=network-online.target watchtower-docker-telemetry.timer
 
 [Service]

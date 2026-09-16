@@ -5,6 +5,7 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
+TimeoutStartSec=45s
 User=root
 Group=watchtower-agent
 UMask=0027
@@ -27,4 +28,3 @@ RestrictSUIDSGID=true
 LockPersonality=true
 RestrictRealtime=true
 ReadWritePaths=/run/watchtower
-
