@@ -17,7 +17,7 @@ RUN mkdir -p src \
 
 # Build the agent
 COPY src ./src
-RUN cargo build --locked --release
+RUN touch src/main.rs && cargo build --locked --release
 
 # Runtime stage
 FROM debian:bookworm-slim

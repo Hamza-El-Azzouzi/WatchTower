@@ -18,10 +18,11 @@ COPY Cargo.toml Cargo.lock ./
 # Build dependencies against a temporary target. The previous empty-project
 # command failed before compiling anything, which made every ARM64 release
 # rebuild the full dependency graph under emulation.
-RUN mkdir -p src \
+RUN mkdir -p src benches \
     && printf 'fn main() {}\n' > src/main.rs \
-    && cargo build --locked --release \
-    && rm -rf src
+    && printf 'fn main() {}\n' > benches/performance.rs \
+    && cargo build --locked --release --bin monitor-server \
+    && rm -rf src benches
 
 # Copy actual source code
 COPY src ./src
@@ -30,7 +31,7 @@ COPY benches ./benches
 COPY config.toml ./config.toml
 
 # Build for release with optimizations
-RUN cargo build --locked --release
+RUN touch src/main.rs && cargo build --locked --release --bin monitor-server
 
 # Stage 2: Runtime image
 FROM debian:bookworm-slim

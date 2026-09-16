@@ -26,7 +26,7 @@ RUN mkdir -p src \
     && rm -rf src
 
 COPY src ./src
-RUN cargo build --locked --release \
+RUN touch src/main.rs && cargo build --locked --release \
     && strip target/release/monitor-agent
 
 FROM scratch AS export
