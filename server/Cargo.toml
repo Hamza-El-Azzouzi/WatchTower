@@ -1,6 +1,6 @@
 [package]
 name = "monitor-server"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -41,6 +41,7 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 rand = "0.8"
 base64 = "0.21"
 sha2 = "0.10"
+ring = "0.17"
 
 # Database - PostgreSQL with SQLx
 sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "chrono", "uuid", "migrate"] }

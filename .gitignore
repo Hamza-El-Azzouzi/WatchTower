@@ -16,6 +16,10 @@ target
 # Local secrets and generated output
 .env
 *.log
+agent-spool/
+credentials.json
+config-signing.pk8
+deploy/oracle/keys/
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

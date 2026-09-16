@@ -39,7 +39,17 @@ Administrators must generate replacement keys after upgrading.
 - [ ] Server-generated agent configuration
 - [ ] Stable generated agent identity
 - [ ] Labels and environment metadata
-- [ ] Agent version, OS, architecture, and upgrade visibility
+- [x] Agent version, OS, architecture, capabilities, heartbeat and delivery visibility
+- [x] Single-use, identity-bound enrollment and two-phase dedicated-key rotation
+- [x] Signed, versioned remote collection settings (trusted key installed manually)
+
+## Reliable Agent Delivery
+
+- [x] Disk-backed bounded FIFO for metrics and logs with automatic replay
+- [x] Persistent stream/sequence identity and transactional server deduplication
+- [x] Reject-newest backpressure, queue diagnostics, retry backoff and replay rate limit
+- [x] Restart/crash recovery and exact durable acknowledgement verification
+- [x] Database-backed delivery/security tests in the Oracle release gate
 
 ## 4. Deeper Monitoring
 
@@ -51,6 +61,8 @@ Administrators must generate replacement keys after upgrading.
 - [x] Uptime, load averages, CPU modes, memory pressure, swap, OOM, and TCP metrics
 
 ## 5. Operations UX
+
+- [x] Professional alert creation with accessible severity controls and rule preview
 
 - [ ] Historical time-range selection and downsampled queries
 - [ ] Agent and time-range comparisons

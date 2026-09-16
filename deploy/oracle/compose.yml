@@ -36,6 +36,9 @@ services:
       METRICS_PERSIST_INTERVAL_SECONDS: "15"
       ALERT_CHECK_INTERVAL_SECONDS: ${ALERT_CHECK_INTERVAL_SECONDS:-5}
       AGENT_OFFLINE_AFTER_SECONDS: ${AGENT_OFFLINE_AFTER_SECONDS:-60}
+      AGENT_CONFIG_SIGNING_KEY_FILE: /run/watchtower-keys/config-signing.pk8
+    volumes:
+      - ./keys:/run/watchtower-keys:ro
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:

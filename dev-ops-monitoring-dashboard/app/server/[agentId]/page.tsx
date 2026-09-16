@@ -10,6 +10,7 @@ import AlertThresholdChart from '@/components/AlertThresholdChart';
 import ConnectionStatus from '@/components/ConnectionStatus';
 import ProcessWatch from '@/components/ProcessWatch';
 import HostTelemetryPanel from '@/components/HostTelemetryPanel';
+import AgentDeliveryPanel from '@/components/AgentDeliveryPanel';
 import IncidentTimeline from '@/components/IncidentTimeline';
 import { getEffectiveAlertRules, type AlertRule } from '@/lib/alerts-api';
 import { formatRelativeTime } from '@/lib/metrics-utils';
@@ -203,6 +204,7 @@ export default function ServerDetailPage() {
             <MetricsSection metrics={metrics} loading={loading} />
 
             <HostTelemetryPanel telemetry={hostTelemetry} metrics={metrics} />
+            <AgentDeliveryPanel agentId={agentId} />
 
             <h2 className="text-2xl font-bold text-foreground mb-6 mt-12">Process Explorer</h2>
             <ProcessWatch processes={processes} updatedAt={processesUpdatedAt} />

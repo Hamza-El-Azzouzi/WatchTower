@@ -47,6 +47,8 @@ pub struct LogEntryInput {
 /// Logs payload to send to server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogsPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<crate::delivery::DeliveryIdentity>,
     pub agent_id: String,
     pub logs: Vec<LogEntryInput>,
 }
@@ -350,6 +352,14 @@ impl LogCollector {
             .expect("buffer lock poisoned")
             .iter()
             .take(self.batch_size)
+            .scan(0usize, |bytes, log| {
+                let size = serde_json::to_vec(log).ok()?.len() + 1;
+                if bytes.saturating_add(size) > 480 * 1024 {
+                    return None;
+                }
+                *bytes += size;
+                Some(log)
+            })
             .cloned()
             .collect::<Vec<_>>();
 
@@ -357,6 +367,7 @@ impl LogCollector {
             None
         } else {
             Some(LogsPayload {
+                delivery: None,
                 agent_id: self.agent_id.clone(),
                 logs,
             })

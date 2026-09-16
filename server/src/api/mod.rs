@@ -1,3 +1,6 @@
+pub mod agent_control;
+#[cfg(test)]
+mod agent_control_tests;
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -34,6 +37,17 @@ const MAX_LOG_SOURCE_LEN: usize = 512;
 const MAX_LOG_MESSAGE_LEN: usize = 16_384;
 
 fn validate_metrics_payload(payload: &MetricsPayload) -> Result<(), ApiError> {
+    if payload.delivery.as_ref().is_some_and(|delivery| {
+        delivery.stream_id.len() != 32
+            || !delivery
+                .stream_id
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || delivery.sequence == 0
+            || delivery.sequence > i64::MAX as u64
+    }) {
+        return Err(ApiError::BadRequest("invalid delivery identity".into()));
+    }
     let valid_identifier = |value: &str, max_len: usize| {
         !value.is_empty()
             && value.len() <= max_len
@@ -151,6 +165,17 @@ fn validate_metrics_payload(payload: &MetricsPayload) -> Result<(), ApiError> {
 }
 
 fn validate_logs_payload(payload: &crate::storage::LogsPayload) -> Result<(), ApiError> {
+    if payload.delivery.as_ref().is_some_and(|delivery| {
+        delivery.stream_id.len() != 32
+            || !delivery
+                .stream_id
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || delivery.sequence == 0
+            || delivery.sequence > i64::MAX as u64
+    }) {
+        return Err(ApiError::BadRequest("invalid log delivery identity".into()));
+    }
     if payload.agent_id.is_empty()
         || payload.agent_id.len() > MAX_AGENT_ID_LEN
         || payload.agent_id.chars().any(|character| {
@@ -320,6 +345,33 @@ pub async fn ingest_metrics(
         }
     }
 
+    if payload.delivery.is_some() {
+        if api_key_id.is_none() {
+            return Err(ApiError::Unauthorized(
+                "durable uploads require an agent API key".into(),
+            ));
+        }
+        let db = state.database.as_ref().ok_or_else(|| {
+            ApiError::InternalError("durable delivery requires PostgreSQL".into())
+        })?;
+        db.register_agent(&payload.agent_id, api_key_id, None, None, None)
+            .await
+            .map_err(|_| ApiError::InternalError("agent registration failed".into()))?;
+        let accepted = db.persist_delivery(&payload).await.map_err(|error| {
+            error!("Durable upload failed: {error}");
+            ApiError::InternalError("durable upload failed; retry with same sequence".into())
+        })?;
+        if !accepted || (Utc::now() - payload.timestamp).num_seconds() > 15 {
+            // Historical replay must not replace live charts or fire stale alerts.
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(
+                    serde_json::json!({"status":"accepted","durable":true,"delivery":payload.delivery}),
+                ),
+            ));
+        }
+    }
+
     // Store metrics in-memory for fast queries
     state.store.insert_metrics(payload.clone());
 
@@ -392,7 +444,7 @@ pub async fn ingest_metrics(
 
     // Persist at a lower cadence in the background. This keeps historical data
     // durable without turning fast live samples into excessive database rows.
-    if state.claim_metrics_persistence(&payload.agent_id) {
+    if payload.delivery.is_none() && state.claim_metrics_persistence(&payload.agent_id) {
         if let Some(db) = &state.database {
             let db = db.clone();
             let agent_id = payload.agent_id.clone();
@@ -421,7 +473,7 @@ pub async fn ingest_metrics(
     Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
-            "status": "accepted"
+            "status": "accepted", "durable": payload.delivery.is_some(), "delivery":payload.delivery
         })),
     ))
 }
@@ -433,6 +485,7 @@ mod payload_validation_tests {
 
     fn payload(agent_id: &str, metrics: HashMap<String, f64>) -> MetricsPayload {
         MetricsPayload {
+            delivery: None,
             agent_id: agent_id.to_string(),
             timestamp: Utc::now(),
             metrics,
@@ -735,11 +788,37 @@ pub async fn ingest_logs(
             ApiError::Forbidden("Agent ID is unavailable to this API key".to_string())
         })?;
 
+    if payload.delivery.is_some() {
+        let db = state
+            .database
+            .as_ref()
+            .ok_or_else(|| ApiError::InternalError("durable logs require PostgreSQL".into()))?;
+        db.register_agent(&payload.agent_id, Some(api_key_id), None, None, None)
+            .await
+            .map_err(|_| ApiError::InternalError("agent registration failed".into()))?;
+        let accepted = db.persist_log_delivery(&payload).await.map_err(|error| {
+            error!("Durable log persistence failed: {error}");
+            ApiError::InternalError("durable log persistence failed; retry same sequence".into())
+        })?;
+        if !accepted {
+            return Ok((
+                StatusCode::ACCEPTED,
+                Json(
+                    serde_json::json!({"status":"accepted","durable":true,"delivery":payload.delivery}),
+                ),
+            ));
+        }
+    }
+
     // Store logs in-memory for fast queries
     state.store.insert_logs(payload.clone());
 
     // Persist to database if available
-    if let Some(db) = &state.database {
+    if let Some(db) = state
+        .database
+        .as_ref()
+        .filter(|_| payload.delivery.is_none())
+    {
         db.register_agent(&payload.agent_id, Some(api_key_id), None, None, None)
             .await
             .map_err(|e| {
@@ -810,7 +889,7 @@ pub async fn ingest_logs(
     Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
-            "status": "accepted"
+            "status": "accepted", "durable": payload.delivery.is_some(), "delivery":payload.delivery
         })),
     ))
 }

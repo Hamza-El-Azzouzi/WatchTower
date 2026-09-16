@@ -4,6 +4,12 @@ name = "dev-server-01"
 [collection]
 interval_seconds = 15
 
+[delivery]
+directory = "./agent-spool"
+max_bytes = 268435456
+max_records = 100000
+replay_interval_ms = 100
+
 [metrics]
 collect_cpu = true
 collect_memory = true
@@ -30,7 +36,7 @@ interval_seconds = 15
 
 [server]
 enabled = true
-url = "http://10.1.17.1:8080"
+url = "https://api.monitor.example.com"
 api_key = "msk_REPLACE_ME"  # Get from the WatchTower admin dashboard
 retry_attempts = 3
 retry_delay_seconds = 2

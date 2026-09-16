@@ -1,6 +1,6 @@
 [package]
 name = "monitor-agent"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -41,6 +41,8 @@ tokio-postgres = { version = "0.7", optional = true }
 mysql_async = { version = "0.34", optional = true }
 serde_json = "1.0"
 libc = "0.2"
+ring = "0.17"
+base64 = "0.21"
 
 [features]
 default = ["postgres", "mysql"]

@@ -394,6 +394,77 @@ impl Database {
     }
 
     /// Insert metrics into database
+    pub async fn persist_delivery(&self, payload: &crate::storage::MetricsPayload) -> Result<bool> {
+        let delivery = payload
+            .delivery
+            .as_ref()
+            .context("missing delivery identity")?;
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("INSERT INTO agent_delivery_streams(agent_id,stream_id) VALUES($1,$2) ON CONFLICT DO NOTHING")
+            .bind(&payload.agent_id).bind(&delivery.stream_id).execute(&mut *transaction).await?;
+        let last: i64 = sqlx::query_scalar("SELECT last_sequence FROM agent_delivery_streams WHERE agent_id=$1 AND stream_id=$2 FOR UPDATE")
+            .bind(&payload.agent_id).bind(&delivery.stream_id).fetch_one(&mut *transaction).await?;
+        if delivery.sequence <= last as u64 {
+            transaction.commit().await?;
+            return Ok(false);
+        }
+        let metrics: Vec<_> = payload.metrics.iter().collect();
+        let mut query = QueryBuilder::<Postgres>::new(
+            "INSERT INTO metrics(agent_id,metric_name,value,timestamp) ",
+        );
+        query.push_values(metrics, |mut row, (name, value)| {
+            row.push_bind(&payload.agent_id)
+                .push_bind(name)
+                .push_bind(value)
+                .push_bind(payload.timestamp);
+        });
+        query.build().execute(&mut *transaction).await?;
+        sqlx::query("UPDATE agent_delivery_streams SET last_sequence=$3, updated_at=now() WHERE agent_id=$1 AND stream_id=$2")
+            .bind(&payload.agent_id).bind(&delivery.stream_id).bind(delivery.sequence as i64).execute(&mut *transaction).await?;
+        sqlx::query("UPDATE agents SET last_successful_upload=now() WHERE id=$1")
+            .bind(&payload.agent_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    pub async fn persist_log_delivery(
+        &self,
+        payload: &crate::storage::LogsPayload,
+    ) -> Result<bool> {
+        let delivery = payload
+            .delivery
+            .as_ref()
+            .context("missing log delivery identity")?;
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query("INSERT INTO agent_delivery_streams(agent_id,stream_id) VALUES($1,$2) ON CONFLICT DO NOTHING").bind(&payload.agent_id).bind(&delivery.stream_id).execute(&mut *transaction).await?;
+        let last:i64=sqlx::query_scalar("SELECT last_sequence FROM agent_delivery_streams WHERE agent_id=$1 AND stream_id=$2 FOR UPDATE").bind(&payload.agent_id).bind(&delivery.stream_id).fetch_one(&mut *transaction).await?;
+        if delivery.sequence <= last as u64 {
+            transaction.commit().await?;
+            return Ok(false);
+        }
+        let mut query = QueryBuilder::<Postgres>::new(
+            "INSERT INTO logs(agent_id,level,source,message,timestamp) ",
+        );
+        query.push_values(&payload.logs, |mut row, log| {
+            row.push_bind(&payload.agent_id)
+                .push_bind(log.level.to_string())
+                .push_bind(&log.source)
+                .push_bind(&log.message)
+                .push_bind(log.timestamp);
+        });
+        query.build().execute(&mut *transaction).await?;
+        sqlx::query("UPDATE agent_delivery_streams SET last_sequence=$3,updated_at=now() WHERE agent_id=$1 AND stream_id=$2").bind(&payload.agent_id).bind(&delivery.stream_id).bind(delivery.sequence as i64).execute(&mut *transaction).await?;
+        sqlx::query("UPDATE agents SET last_successful_upload=now() WHERE id=$1")
+            .bind(&payload.agent_id)
+            .execute(&mut *transaction)
+            .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    /// Insert metrics into database
     pub async fn insert_metrics(
         &self,
         agent_id: &str,

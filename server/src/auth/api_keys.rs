@@ -84,7 +84,7 @@ impl ApiKey {
         )
     }
 
-    fn hash(raw_key: &str) -> String {
+    pub(crate) fn hash(raw_key: &str) -> String {
         use base64::{engine::general_purpose, Engine as _};
         general_purpose::STANDARD_NO_PAD.encode(Sha256::digest(raw_key.as_bytes()))
     }

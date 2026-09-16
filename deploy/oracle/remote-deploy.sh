@@ -93,6 +93,9 @@ if [[ -n "$AGENT_API_KEY" ]]; then
     printf 'SERVER_URL=http://127.0.0.1:8080\n'
     printf 'API_KEY=%s\n' "$AGENT_API_KEY"
     printf 'COLLECTION_INTERVAL=2\n'
+    if [[ -f /etc/watchtower/config-signing.pub ]]; then
+      printf 'AGENT_CONFIG_PUBLIC_KEY_FILE=/etc/watchtower/config-signing.pub\n'
+    fi
     printf 'PROCESS_WATCH_ENABLED=true\n'
     printf 'PROCESS_WATCH_NAMES=%s\n' "$PROCESS_WATCH_NAMES"
     printf 'SERVICE_WATCH_ENABLED=true\n'

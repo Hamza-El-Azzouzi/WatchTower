@@ -93,3 +93,23 @@ dependency cache layers include dummy manifest targets (including the server's
 declared performance benchmark), remove them before copying real sources, and
 touch the real main source before the final build. This prevents retaining the
 placeholder binary. The dashboard lockfile is verified with CI's npm 10.
+
+## Priority 3: reliable delivery (local implementation, 0.2.0)
+
+`agent/src/delivery.rs` supplies a locked, fsynced, bounded disk FIFO for metrics
+and logs. The independent uploader replays sequences with capped retry backoff,
+jitter and a rate limit; it deletes records only on a matching durable receipt.
+PostgreSQL migration `20260916000001_reliable_delivery.sql` adds per-stream
+watermarks, heartbeat/upload state, enrollment tokens, rotation state and signed
+configuration. Data and watermark updates commit together; old metric replay
+does not replace live state. Heartbeats keep replaying agents visible online.
+
+The control plane uses dedicated tenant-bound keys, single-use 15-minute enrollment,
+two-phase key rotation, and Ed25519 updates limited to collection interval/flags.
+Agents trust an explicitly installed public key, never the endpoint's returned key.
+See `deploy/oracle/RELIABLE_DELIVERY.md` for setup and known boundaries (including
+enrollment response loss and manual signing-key deployment).
+
+The host page adds `AgentDeliveryPanel`; the Create Alert Rule page uses Lucide
+icons, labeled inputs, severity radio cards, validation, channel-state messaging,
+and a live policy preview. Remote process controls remain excluded.

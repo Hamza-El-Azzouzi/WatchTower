@@ -9,6 +9,9 @@ User=watchtower-agent
 Group=watchtower-agent
 SupplementaryGroups=adm
 EnvironmentFile=/etc/watchtower/agent.env
+Environment=AGENT_SPOOL_DIRECTORY=/var/lib/watchtower-agent
+StateDirectory=watchtower-agent
+StateDirectoryMode=0700
 ExecStart=/usr/local/bin/monitor-agent
 Restart=always
 RestartSec=5

@@ -15,7 +15,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
@@ -30,9 +30,11 @@ use storage::TimeSeriesStore;
 #[derive(Parser, Debug)]
 #[command(name = "monitor-server")]
 #[command(author = "DevOps Monitoring System")]
-#[command(version = "0.1.0")]
+#[command(version)]
 #[command(about = "Central monitoring server for metric aggregation", long_about = None)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<ServerCommand>,
     /// Path to configuration file
     #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
@@ -50,9 +52,48 @@ struct Args {
     verbose: bool,
 }
 
+#[derive(Subcommand, Debug)]
+enum ServerCommand {
+    /// Generate an offline signing key pair; files must not already exist.
+    GenerateConfigKey {
+        #[arg(long)]
+        private_output: PathBuf,
+        #[arg(long)]
+        public_output: PathBuf,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if let Some(ServerCommand::GenerateConfigKey {
+        private_output,
+        public_output,
+    }) = &args.command
+    {
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+        use std::{io::Write, os::unix::fs::OpenOptionsExt};
+        let pkcs8 = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+            .map_err(|_| anyhow::anyhow!("signing key generation failed"))?;
+        let pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref())
+            .map_err(|_| anyhow::anyhow!("signing key parse failed"))?;
+        let mut private = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(private_output)?;
+        let mut public = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(public_output)?;
+        private.write_all(pkcs8.as_ref())?;
+        private.sync_all()?;
+        public.write_all(pair.public_key().as_ref())?;
+        public.sync_all()?;
+        println!("Configuration signing key pair created. Install the public key through your trusted deployment channel.");
+        return Ok(());
+    }
 
     // Initialize logging
     let log_level = if args.verbose { "debug" } else { "info" };
@@ -321,6 +362,31 @@ async fn main() -> Result<()> {
 
     // Public routes (no authentication required)
     let public_routes = Router::new()
+        .route(
+            "/api/v1/agents/enrollment-tokens",
+            post(api::agent_control::create_enrollment),
+        )
+        .route("/api/v1/agents/enroll", post(api::agent_control::enroll))
+        .route(
+            "/api/v1/agents/heartbeat",
+            post(api::agent_control::heartbeat),
+        )
+        .route(
+            "/api/v1/agents/:id/delivery",
+            get(api::agent_control::status),
+        )
+        .route(
+            "/api/v1/agents/:id/rotate-key",
+            post(api::agent_control::rotate),
+        )
+        .route(
+            "/api/v1/agents/:id/confirm-key",
+            post(api::agent_control::confirm_rotation),
+        )
+        .route(
+            "/api/v1/agents/:id/config",
+            get(api::agent_control::fetch_config).put(api::agent_control::publish_config),
+        )
         // Admin authentication endpoints (must be public)
         .route("/api/v1/admin/login", post(api::admin_login))
         .route("/api/v1/admin/validate", get(api::admin_validate))

@@ -1,6 +1,8 @@
 mod collector;
 mod collectors;
 mod config;
+mod control;
+mod delivery;
 mod sender;
 
 use anyhow::Result;
@@ -31,7 +33,7 @@ use sender::{MetricsPayload, MetricsSender};
 #[derive(Parser, Debug)]
 #[command(name = "monitor-agent")]
 #[command(author = "DevOps Monitoring System")]
-#[command(version = "0.1.0")]
+#[command(version)]
 #[command(about = "System monitoring agent for collecting metrics", long_about = None)]
 struct Args {
     #[command(subcommand)]
@@ -52,6 +54,10 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Enroll using the short-lived AGENT_ENROLLMENT_TOKEN environment variable.
+    Enroll,
+    /// Rotate a dedicated agent key; stop the agent service before running.
+    RotateKey,
     /// Write a sanitized Docker telemetry snapshot for the unprivileged agent.
     DockerSnapshot {
         #[arg(long, default_value = "/var/run/docker.sock")]
@@ -180,7 +186,18 @@ impl MetricCollectors {
     }
 }
 
-async fn run_agent(config: Config) -> Result<()> {
+async fn run_agent(mut config: Config) -> Result<()> {
+    // Lock and recover interrupted writes before loading a rotated credential.
+    let startup_queue = if config.server.enabled {
+        Some(delivery::DiskQueue::open(
+            config.delivery.directory.clone(),
+            config.delivery.max_bytes,
+            config.delivery.max_records,
+        )?)
+    } else {
+        None
+    };
+    control::load_credentials(&mut config).await?;
     info!("Starting monitoring agent: {}", config.agent.name);
     info!(
         "Collection interval: {} seconds",
@@ -254,14 +271,67 @@ async fn run_agent(config: Config) -> Result<()> {
                 "No API key configured - server may reject metrics if authentication is required"
             );
         }
-        Some(MetricsSender::new(
+        Some(std::sync::Arc::new(MetricsSender::new(
             config.server.url.clone(),
             config.server.api_key.clone(),
             config.server.retry_attempts,
             config.server.retry_delay_seconds,
-        )?)
+        )?))
     } else {
         info!("Server integration disabled - metrics will only be displayed locally");
+        None
+    };
+
+    let remote_settings =
+        std::sync::Arc::new(std::sync::Mutex::new(None::<control::RemotePayload>));
+    let spool = if let Some(sender) = sender.clone() {
+        let queue = std::sync::Arc::new(std::sync::Mutex::new(
+            startup_queue.expect("enabled delivery queue"),
+        ));
+        let worker_queue = queue.clone();
+        let replay_interval =
+            Duration::from_millis(config.delivery.replay_interval_ms.clamp(20, 5000));
+        control::start(config.clone(), queue.clone(), remote_settings.clone())?;
+        tokio::spawn(async move {
+            let mut failures = 0u32;
+            loop {
+                let record = worker_queue.lock().expect("spool lock poisoned").peek();
+                match record {
+                    Ok(Some((path, payload))) => match sender.send_queued(&payload).await {
+                        Ok(()) => {
+                            if let Err(error) = worker_queue
+                                .lock()
+                                .expect("spool lock poisoned")
+                                .acknowledge(&path)
+                            {
+                                error!("Cannot acknowledge spool record: {error}");
+                            }
+                            failures = 0;
+                            time::sleep(replay_interval).await;
+                        }
+                        Err(error) => {
+                            failures = failures.saturating_add(1);
+                            warn!("Queued upload failed; preserving record: {error}");
+                            let jitter = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .subsec_millis() as u64;
+                            time::sleep(Duration::from_millis(
+                                (2u64.pow(failures.min(5)) * 1000).min(30000) + jitter,
+                            ))
+                            .await;
+                        }
+                    },
+                    Ok(None) => time::sleep(Duration::from_millis(250)).await,
+                    Err(error) => {
+                        error!("Spool cannot be read; preserving data: {error}");
+                        time::sleep(Duration::from_secs(5)).await;
+                    }
+                }
+            }
+        });
+        Some(queue)
+    } else {
         None
     };
 
@@ -307,6 +377,22 @@ async fn run_agent(config: Config) -> Result<()> {
 
     loop {
         interval_timer.tick().await;
+        let update = remote_settings
+            .lock()
+            .expect("config lock poisoned")
+            .clone();
+        if let Some(update) = update {
+            if config.collection.interval_seconds != update.settings.interval_seconds {
+                config.collection.interval_seconds = update.settings.interval_seconds;
+                interval_timer =
+                    time::interval(Duration::from_secs(update.settings.interval_seconds));
+                interval_timer.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
+            }
+            config.metrics.collect_cpu = update.settings.collect_cpu;
+            config.metrics.collect_memory = update.settings.collect_memory;
+            config.metrics.collect_disk = update.settings.collect_disk;
+            config.metrics.collect_network = update.settings.collect_network;
+        }
 
         let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
         let (metrics, mounts, network_interfaces) = collectors.collect(&config);
@@ -316,8 +402,19 @@ async fn run_agent(config: Config) -> Result<()> {
         metrics.display();
 
         // Send metrics to server if enabled
-        if let Some(ref sender) = sender {
+        if let Some(ref spool) = spool {
             let mut metrics_map = metrics.to_metrics_map();
+            {
+                let queue = spool.lock().expect("spool lock poisoned");
+                let (records, bytes, last_success) = queue.status()?;
+                metrics_map.insert("agent_queue_records".into(), records as f64);
+                metrics_map.insert("agent_queue_bytes".into(), bytes as f64);
+                metrics_map.insert("agent_dropped_samples".into(), queue.dropped_samples as f64);
+                metrics_map.insert(
+                    "agent_last_successful_upload_timestamp".into(),
+                    last_success.map_or(0.0, |timestamp| timestamp.timestamp() as f64),
+                );
+            }
             let mut process_snapshot = Vec::new();
 
             if config.process_watch.enabled {
@@ -385,6 +482,7 @@ async fn run_agent(config: Config) -> Result<()> {
             }
 
             let payload = MetricsPayload {
+                delivery: None,
                 agent_id: config.agent.name.clone(),
                 timestamp: chrono::Utc::now(),
                 metrics: metrics_map,
@@ -395,9 +493,10 @@ async fn run_agent(config: Config) -> Result<()> {
                 containers: container_snapshots.clone(),
             };
 
-            if let Err(e) = sender.send_metrics(&payload).await {
-                warn!("Failed to send metrics to server: {}", e);
-                // Continue despite send failure - we still display metrics locally
+            match spool.lock().expect("spool lock poisoned").enqueue(payload) {
+                Ok(true)=>{},
+                Ok(false)=>warn!("Delivery storage full: rejecting newest sample; existing queued data preserved"),
+                Err(error)=>error!("Cannot persist sample; collection continues, existing spool preserved: {error}"),
             }
         }
 
@@ -413,13 +512,18 @@ async fn run_agent(config: Config) -> Result<()> {
                 if let Some(logs_payload) = log_collector.create_payload() {
                     let log_count = logs_payload.logs.len();
 
-                    if let Some(ref sender) = sender {
-                        // Send logs to server
-                        if let Err(e) = sender.send_logs(&logs_payload).await {
-                            warn!("Failed to send {} logs to server: {}", log_count, e);
-                        } else {
-                            log_collector.mark_sent(log_count);
-                            debug!("Sent {} logs to server", log_count);
+                    if let Some(ref spool) = spool {
+                        match spool
+                            .lock()
+                            .expect("spool lock poisoned")
+                            .enqueue(logs_payload)
+                        {
+                            Ok(true) => {
+                                log_collector.mark_sent(log_count);
+                                debug!("Persisted {} logs in delivery spool", log_count);
+                            }
+                            Ok(false) => warn!("Delivery storage full; logs remain buffered"),
+                            Err(error) => error!("Cannot persist logs; buffer retained: {error}"),
                         }
                     }
                 }
@@ -552,28 +656,27 @@ async fn main() -> Result<()> {
         .with_line_number(false)
         .init();
 
-    if let Some(Command::DockerSnapshot { socket, output }) = args.command {
-        write_docker_snapshot(socket, output).await?;
+    if let Some(Command::DockerSnapshot { socket, output }) = &args.command {
+        write_docker_snapshot(socket.clone(), output.clone()).await?;
         return Ok(());
     }
 
     // Load configuration
     let mut config = if let Some(config_path) = args.config {
         info!("Loading configuration from: {:?}", config_path);
-        match Config::from_file(&config_path) {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                error!("Failed to load configuration: {}", e);
-                error!("Using default configuration");
-                Config::default()
-            }
-        }
+        Config::from_file(&config_path)?
     } else {
         info!("No configuration file specified, using defaults");
         Config::default()
     };
 
     config.apply_env_overrides();
+    if matches!(args.command, Some(Command::Enroll)) {
+        return control::enroll(&config).await;
+    }
+    if matches!(args.command, Some(Command::RotateKey)) {
+        return control::rotate(&config).await;
+    }
 
     // Override interval if provided via CLI
     if let Some(interval) = args.interval {

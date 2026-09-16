@@ -5,6 +5,8 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub delivery: DeliveryConfig,
     pub agent: AgentConfig,
     pub collection: CollectionConfig,
     pub metrics: MetricsConfig,
@@ -20,6 +22,28 @@ pub struct Config {
     pub service_watch: ServiceWatchConfig,
     #[serde(default)]
     pub docker_monitor: DockerMonitorConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryConfig {
+    pub directory: std::path::PathBuf,
+    pub max_bytes: u64,
+    pub max_records: usize,
+    #[serde(default = "default_replay_interval")]
+    pub replay_interval_ms: u64,
+}
+fn default_replay_interval() -> u64 {
+    100
+}
+impl Default for DeliveryConfig {
+    fn default() -> Self {
+        Self {
+            directory: "./agent-spool".into(),
+            max_bytes: 256 * 1024 * 1024,
+            max_records: 100_000,
+            replay_interval_ms: default_replay_interval(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +225,7 @@ impl Config {
 
     pub fn default() -> Self {
         Config {
+            delivery: DeliveryConfig::default(),
             agent: AgentConfig {
                 name: "default-agent".to_string(),
             },
@@ -230,6 +255,19 @@ impl Config {
 
     /// Apply the environment contract used by the container image.
     pub fn apply_env_overrides(&mut self) {
+        if let Ok(directory) = std::env::var("AGENT_SPOOL_DIRECTORY") {
+            self.delivery.directory = directory.into();
+        }
+        if let Ok(value) = std::env::var("AGENT_SPOOL_MAX_BYTES") {
+            if let Ok(limit) = value.parse::<u64>() {
+                self.delivery.max_bytes = limit;
+            }
+        }
+        if let Ok(value) = std::env::var("AGENT_SPOOL_MAX_RECORDS") {
+            if let Ok(limit) = value.parse::<usize>() {
+                self.delivery.max_records = limit;
+            }
+        }
         if let Ok(name) = std::env::var("AGENT_NAME") {
             if !name.trim().is_empty() {
                 self.agent.name = name;

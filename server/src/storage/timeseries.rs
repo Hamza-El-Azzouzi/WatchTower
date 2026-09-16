@@ -42,6 +42,8 @@ pub struct LogEntry {
 /// Logs payload received from agents
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogsPayload {
+    #[serde(default)]
+    pub delivery: Option<DeliveryIdentity>,
     pub agent_id: String,
     pub logs: Vec<LogEntryInput>,
 }
@@ -65,6 +67,8 @@ pub struct DataPoint {
 /// Metrics payload received from agents
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MetricsPayload {
+    #[serde(default)]
+    pub delivery: Option<DeliveryIdentity>,
     pub agent_id: String,
     pub timestamp: DateTime<Utc>,
     pub metrics: HashMap<String, f64>,
@@ -78,6 +82,12 @@ pub struct MetricsPayload {
     pub services: Vec<ServiceSnapshot>,
     #[serde(default)]
     pub containers: Vec<ContainerSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryIdentity {
+    pub stream_id: String,
+    pub sequence: u64,
 }
 
 /// Bounded, privacy-aware process data supplied by an authenticated agent.
