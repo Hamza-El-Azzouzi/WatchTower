@@ -1,6 +1,6 @@
 # WatchTower Implementation Context
 
-Last updated: 2026-09-15
+Last updated: 2026-09-16
 
 ## Architecture
 
@@ -53,9 +53,8 @@ groups the flat metrics into process rows.
 1. Move browser credentials out of `localStorage` into secure, HttpOnly,
    SameSite cookies via a dashboard backend-for-frontend. This needs an auth
    contract change; CSP reduces but does not remove the current XSS exposure.
-2. Add service-manager state collection (systemd/launchd/Windows), distinct
-   from executable process presence.
-3. Add offline-agent alert rules and recovery notifications.
+2. Extend Linux systemd service telemetry to launchd/Windows equivalents.
+3. Exercise notification providers and maintenance policies with production credentials.
 4. Add Rust dependency audits and container-level integration tests to CI.
 5. Add retention/admin audit controls and cursor-based log pagination.
 
@@ -70,3 +69,27 @@ and rose for critical state. Shared layout behavior lives in `Sidebar`,
 fixed 288px desktop rail and a modal navigation drawer below the `lg`
 breakpoint. New pages should use the `page-shell`, `surface-panel`, `eyebrow`,
 and `metric-track` utilities to preserve spacing and hierarchy.
+
+## Production alerting and host telemetry
+
+Priority 1 now connects configured chart thresholds, offline-agent detection,
+firing/recovery delivery (webhook, Discord, Slack, email), exponential retries,
+delivery history, silences/maintenance, five-second evaluation, and incident timelines.
+
+Priority 2 adds load/uptime, CPU modes, memory/cache/swap/OOM counters, mount
+capacity/inodes and disk I/O, interface traffic/errors/drops, TCP counts,
+systemd status/restarts, and sanitized Docker resource/health snapshots.
+Structured snapshots are bounded and validated by the server and sent through
+the existing authenticated metrics/WebSocket path. Process exploration remains
+read-only; command arguments and process environments remain excluded.
+
+On Oracle, an unprivileged agent collects every two seconds. A hardened root
+oneshot service writes Docker snapshots every ten seconds to
+`/run/watchtower/docker-telemetry.json` (0640 root:watchtower-agent), avoiding
+Docker-group privileges for the long-running agent.
+
+Oracle release jobs use native ARM runners for ARM hosts, not QEMU. Docker
+dependency cache layers include dummy manifest targets (including the server's
+declared performance benchmark), remove them before copying real sources, and
+touch the real main source before the final build. This prevents retaining the
+placeholder binary. The dashboard lockfile is verified with CI's npm 10.
