@@ -4,6 +4,7 @@ use std::{
     ffi::CString,
     fs,
     os::unix::ffi::OsStrExt,
+    os::unix::fs::MetadataExt,
     path::Path,
     time::Instant,
 };
@@ -65,6 +66,7 @@ impl DiskCollector {
         let mut total_space = 0u64;
         let mut used_space = 0u64;
         let mut seen_mounts = HashSet::new();
+        let mut capacity = FilesystemCapacity::default();
         let mut mounts = Vec::new();
 
         for disk in self.disks.iter() {
@@ -75,8 +77,17 @@ impl DiskCollector {
             let total = disk.total_space();
             let available = disk.available_space();
             let used = total.saturating_sub(available);
-            total_space = total_space.saturating_add(total);
-            used_space = used_space.saturating_add(used);
+            // Bind mounts (including systemd sandbox mounts) share st_dev.
+            // Container overlays expose backing storage again, not extra capacity.
+            if capacity.include(
+                &disk.file_system().to_string_lossy(),
+                fs::metadata(disk.mount_point())
+                    .ok()
+                    .map(|metadata| metadata.dev()),
+            ) {
+                total_space = total_space.saturating_add(total);
+                used_space = used_space.saturating_add(used);
+            }
 
             let device = disk.name().to_string_lossy().to_string();
             let resolved_device =
@@ -159,6 +170,24 @@ fn ratio(used: u64, total: u64) -> f64 {
     }
 }
 
+#[derive(Default)]
+struct FilesystemCapacity {
+    devices: HashSet<u64>,
+}
+
+impl FilesystemCapacity {
+    fn include(&mut self, filesystem: &str, device: Option<u64>) -> bool {
+        if matches!(
+            filesystem,
+            "overlay" | "tmpfs" | "devtmpfs" | "squashfs" | "proc" | "sysfs"
+        ) {
+            return false;
+        }
+        // Do not invent an identity when a mount cannot be inspected.
+        device.is_some_and(|device| self.devices.insert(device))
+    }
+}
+
 fn read_diskstats() -> HashMap<String, DiskIoCounters> {
     fs::read_to_string("/proc/diskstats")
         .unwrap_or_default()
@@ -201,6 +230,18 @@ fn inode_counts(path: &Path) -> (u64, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn capacity_counts_bind_mounts_once_and_keeps_distinct_partitions() {
+        let mut capacity = FilesystemCapacity::default();
+        assert!(capacity.include("ext4", Some(1)));
+        assert!(!capacity.include("ext4", Some(1)));
+        assert!(!capacity.include("ext4", Some(1)));
+        assert!(capacity.include("ext4", Some(2)));
+        assert!(capacity.include("vfat", Some(3)));
+        assert!(!capacity.include("overlay", Some(4)));
+        assert!(!capacity.include("tmpfs", Some(5)));
+        assert!(!capacity.include("ext4", None));
+    }
     #[test]
     fn collects_bounded_mount_data() {
         let (_, mounts) = DiskCollector::new().collect_all();

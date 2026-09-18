@@ -19,6 +19,7 @@ function MetricsSection({ metrics, loading }: MetricsSectionProps) {
   let swapPercent = 0;
   let swapUsed = 0;
   let swapTotal = 0;
+  let swapReported = false;
   let diskUsed = 0;
   let diskTotal = 0;
   let diskPercent = 0;
@@ -47,6 +48,7 @@ function MetricsSection({ metrics, loading }: MetricsSectionProps) {
     // Extract swap in bytes
     swapUsed = extractMetric(metrics.metrics, 'swap_used_bytes');
     swapTotal = extractMetric(metrics.metrics, 'swap_total_bytes');
+    swapReported = metrics.metrics.some(metric => metric.name === 'swap_total_bytes');
 
     memUsed = extractMetric(metrics.metrics, 'memory_used_bytes');
     memTotal = extractMetric(metrics.metrics, 'memory_total_bytes');
@@ -55,9 +57,10 @@ function MetricsSection({ metrics, loading }: MetricsSectionProps) {
     networkTx = extractMetric(metrics.metrics, 'network_tx_bytes_per_sec') || extractMetric(metrics.metrics, 'network_tx_bytes');
     
     // Temperature metrics
-    const cpuTempRaw = extractMetric(metrics.metrics, 'cpu_temp_celsius');
+    const cpuTempRaw = metrics.metrics.find(metric => metric.name === 'cpu_temp_celsius')?.value;
+    const cpuTempAvailable = metrics.metrics.find(metric => metric.name === 'cpu_temperature_available')?.value;
     const gpuTempRaw = extractMetric(metrics.metrics, 'gpu_temp_celsius');
-    cpuTemp = cpuTempRaw > 0 ? cpuTempRaw : null;
+    cpuTemp = cpuTempAvailable !== 0 && cpuTempRaw !== undefined && Number.isFinite(cpuTempRaw) ? cpuTempRaw : null;
     gpuTemp = gpuTempRaw > 0 ? gpuTempRaw : null;
     
     // GPU metrics
@@ -71,8 +74,9 @@ function MetricsSection({ metrics, loading }: MetricsSectionProps) {
     // Extract per-core CPU metrics
     let coreIndex = 0;
     while (true) {
-      const coreUsage = extractMetric(metrics.metrics, `cpu_core_${coreIndex}`);
-      if (coreUsage === 0 && coreIndex > 0) break; // Stop when we don't find more cores
+      const coreMetric = metrics.metrics.find(metric => metric.name === `cpu_core_${coreIndex}`);
+      if (!coreMetric) break; // An idle core is still a core.
+      const coreUsage = coreMetric.value;
       if (coreUsage >= 0) {
         cpuCores.push(coreUsage);
         coreIndex++;
@@ -172,23 +176,23 @@ function MetricsSection({ metrics, loading }: MetricsSectionProps) {
           <>
             <MetricCard
               label="Swap Memory"
-              value={swapPercent.toFixed(2)}
-              unit="%"
+              value={swapReported ? swapPercent.toFixed(2) : 'N/A'}
+              unit={swapReported ? '%' : ''}
               percentage={swapPercent}
               color={swapColor}
               icon={<MemoryStick className="w-6 h-6" />}
-              secondaryValue={swapTotal > 0 ? `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)}` : 'No swap'}
+              secondaryValue={!swapReported ? 'Waiting for swap telemetry' : swapTotal > 0 ? `${formatBytes(swapUsed)} / ${formatBytes(swapTotal)} · ${swapUsed === 0 ? 'Enabled, unused' : 'In use'}` : 'Swap not enabled'}
               size="md"
             />
 
             <MetricCard
               label="CPU Temperature"
-              value={cpuTemp ? cpuTemp.toFixed(1) : 'N/A'}
-              unit={cpuTemp ? '°C' : ''}
-              percentage={cpuTemp ? (cpuTemp / 100) * 100 : 0}
-              color={cpuTemp && cpuTemp >= 80 ? 'red' : cpuTemp && cpuTemp >= 70 ? 'yellow' : cpuTemp ? 'green' : undefined}
+              value={cpuTemp !== null ? cpuTemp.toFixed(1) : 'N/A'}
+              unit={cpuTemp !== null ? '°C' : ''}
+              percentage={cpuTemp !== null ? Math.max(0, cpuTemp) : 0}
+              color={cpuTemp !== null ? (cpuTemp >= 80 ? 'red' : cpuTemp >= 70 ? 'yellow' : 'green') : undefined}
               icon={<Thermometer className="w-6 h-6" />}
-              secondaryValue={cpuTemp ? (cpuTemp < 70 ? 'Normal' : cpuTemp < 80 ? 'Warm' : 'Hot') : 'Not available'}
+              secondaryValue={cpuTemp !== null ? (cpuTemp < 70 ? 'Normal' : cpuTemp < 80 ? 'Warm' : 'Hot') : 'Host exposes no CPU sensor'}
               size="md"
             />
 

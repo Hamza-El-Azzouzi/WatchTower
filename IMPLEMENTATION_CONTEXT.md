@@ -181,3 +181,24 @@ status mismatches and rejection of the cloud metadata address without an SSRF
 test bypass. Oracle deployment now saves a root-only compressed PostgreSQL backup
 under `/opt/watchtower/backups` before startup migrations. Backup retention and
 operator-reviewed assignment of ambiguous legacy tenant policies remain manual.
+
+## Host capacity, swap and CPU temperature corrections (2026-09-18)
+
+Disk headline capacity now counts each filesystem device (`st_dev`) once, not
+each mount path. This fixes systemd bind mounts repeating Oracle's root volume;
+per-mount telemetry remains available. Overlay, tmpfs and other virtual storage
+are excluded from aggregate capacity. Uninspectable mounts are not guessed.
+Byte displays use IEC labels (GiB, MiB) consistent with their base-1024 values.
+
+Swap already refreshes `/proc/meminfo` every collection. Read-only production
+verification found 8,589,930,496 bytes enabled and zero used, matching the OS:
+unused swap is expected with available RAM, not a stalled collector. The UI now
+distinguishes missing telemetry, disabled swap, enabled-unused and used swap.
+No swap settings or memory-pressure workload were changed.
+
+CPU sensor detection recognizes Intel/AMD labels and falls back to CPU thermal
+zones, filtering invalid readings. Availability is explicit so a missing sensor
+does not retain an old temperature in the UI; zero Celsius is valid. AMD GPU
+sensors are not classified as CPU sensors. Oracle exposes no hwmon sensors or
+thermal zones, so its CPU temperature remains unavailable, never synthesized.
+CPU core counting now includes idle cores instead of stopping at zero usage.

@@ -131,7 +131,15 @@ impl SystemMetrics {
         }
 
         // Temperature metrics
-        if let Some(temp) = self.cpu_temp_celsius {
+        metrics.insert(
+            "cpu_temperature_available".to_string(),
+            if self.cpu_temp_celsius.is_some_and(|temp| temp.is_finite()) {
+                1.0
+            } else {
+                0.0
+            },
+        );
+        if let Some(temp) = self.cpu_temp_celsius.filter(|temp| temp.is_finite()) {
             metrics.insert("cpu_temp_celsius".to_string(), temp as f64);
         }
         if let Some(temp) = self.gpu_temp_celsius {
